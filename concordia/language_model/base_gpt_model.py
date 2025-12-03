@@ -90,16 +90,22 @@ class BaseGPTModel(language_model.LanguageModel):
         {'role': 'user', 'content': prompt},
     ]
 
-    response = self._client.chat.completions.create(
-        model=self._model_name,
-        messages=messages,
-        temperature=temperature,
-        max_completion_tokens=max_tokens,
-        timeout=timeout,
-        seed=seed,
-        reasoning_effort=reasoning_effort,
-        verbosity=verbosity,
-    )
+    # Only include reasoning_effort and verbosity for models that support them
+    # (e.g., GPT-5, o1 models)
+    create_kwargs = {
+        'model': self._model_name,
+        'messages': messages,
+        'temperature': temperature,
+        'max_completion_tokens': max_tokens,
+        'timeout': timeout,
+        'seed': seed,
+    }
+    # Only add reasoning_effort and verbosity for models that support them
+    if 'gpt-5' in self._model_name.lower() or 'o1' in self._model_name.lower():
+      create_kwargs['reasoning_effort'] = reasoning_effort
+      create_kwargs['verbosity'] = verbosity
+
+    response = self._client.chat.completions.create(**create_kwargs)
 
     if self._measurements is not None:
       self._measurements.publish_datum(
