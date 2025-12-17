@@ -33,6 +33,7 @@ class Goal:
   name: str
   description: str
   ideal: float = 1.0
+  role: str | None = None  # Interview context role (e.g., "Product Manager")
 
 
 @dataclass
@@ -41,6 +42,7 @@ class Utterance:
   turn: int
   speaker: str
   text: str
+  body: str = ""  # Body language description
 
 
 @dataclass

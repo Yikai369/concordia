@@ -1,0 +1,32 @@
+[
+  {
+    "time": "2025-12-16T21:43:33Z",
+    "turn": 1,
+    "speaker": "John",
+    "listener": "Jane",
+    "speaker_text": "I have a strong background in data analysis and stakeholder communication, which enables me to effectively define and execute a strategic product vision.",
+    "speaker_body": "Sitting up straight with a slight nod to emphasize understanding and confidence.",
+    "audience_I": 0.8,
+    "audience_text": "The interviewee demonstrates a strong ability to analyze data and effectively communicate product strategy, although there is room for improvement in stakeholder management.",
+    "audience_body": "Maintained consistent, attentive posture but avoided direct eye contact.",
+    "actor_I_hat": 0.5,
+    "actor_pe": 0.0,
+    "reflection_text": "",
+    "ess": 0.0
+  },
+  {
+    "time": "2025-12-16T21:43:33Z",
+    "turn": 2,
+    "speaker": "John",
+    "listener": "Jane",
+    "speaker_text": "I leverage data analytics to prioritize product features and ensure they align with both user needs and organizational goals.",
+    "speaker_body": "Maintain steady eye contact with a confident nod.",
+    "audience_I": 0.7,
+    "audience_text": "The candidate shows solid technical understanding and effective data-driven decision-making, but needs to enhance stakeholder management and feature prioritization skills.",
+    "audience_body": "Maintained a steady posture with minimal eye contact.",
+    "actor_I_hat": 0.7912235638788918,
+    "actor_pe": 0.2880696805414156,
+    "reflection_text": "To improve my perceived competence, I'll focus on enhancing my communication skills, particularly regarding stakeholder management. This means I'll make an effort to engage more actively in conversations, ensuring clarity and demonstrating my understanding through concise and informed responses. Additionally, I'll work on articulating a clear product vision, which aligns with the company's strategic objectives, to exhibit my grasp of product development and decision-making based on data analysis.",
+    "ess": 5.6646670857724235
+  }
+]
