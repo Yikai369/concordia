@@ -436,7 +436,7 @@ class Agent:
         resp_prompt = self._prompt_header() + f"""You are {self.name}. You want to {self.memory.goal.name}. {self.memory.goal.description}. {context_prompt if self.context else ""}
         You rated the {actor_name} with score {I_t:.2f} on a scale from 0 to 1, where 0 indicates "not at all", and 1 indicates "to a great extent".
         Produce a short reply that reflects your evaluation of the {actor_name}’s competence and matches your score, and include a very brief body language description.
-
+        
         Consider recent conversation history in forming your response, while matching your score in sentiment.
 
         Recent conversation (last {self.recent_k}):
@@ -578,7 +578,7 @@ class Agent:
 
     # ---------- Act ----------
     def act(self, turn: int) -> Utterance:
-        """Produce an utterance to the partner aimed at improving the goal.
+        """Produce an utterance to the partner aimed at improving the goal. 
         This is only used for the initial turn (turn 0) when there is no conversation history.
 
         The method prompts the agent's LLM with the goal and expects output formatted as:
@@ -613,7 +613,7 @@ class Agent:
         """Produce an utterance conditioned on a belief estimate (I_hat).
         This is used after the initial turn when there is conversation history.
 
-        This method includes recent conversation history and a brief summary of recent
+        This method includes recent conversation history and a brief summary of recent 
         I_hat values (from `self.memory.pf_history`) so the agent can reason about
         whether their previous moves had the intended effect.
         """
@@ -723,7 +723,7 @@ class ConversationStudy:
         """
         speaker, listener = (self.A, self.B)
         speaker.initialize_cultural_norms(speaker.cultural_norms)
-
+        
         for t in range(1, self.total_turns + 1):
             print(f"--- Turn {t} ---")
             # 1) Actor (speaker) acts: first turn uses act(), subsequent turns use act_based_on_belief()
@@ -874,7 +874,7 @@ def main():
         - Decision rationale
         - Clarity of communication
         """
-
+        
         actor_goal = Goal(
             name="competence",
             description="Your goal is to be perceived as highly competent in an interview. You may talk about your strengths, experiences, and problem-solving skills relevant to the role.",
@@ -890,7 +890,7 @@ def main():
         )
     else:
         print("No specific interview context provided.")
-
+        
         actor_goal = Goal(
             name="competence",
             description="Your goal is to be perceived as highly competent by your partner.",

@@ -692,15 +692,28 @@ class IMPEReflectionComponent(
     return '\n'.join(header_parts)
 
   def post_observe(self) -> str:
-    """Generate reflection based on current I_hat."""
+    """No-op in post_observe - reflection moved to pre_act to ensure PF update completes first."""
+    return ''
+
+  def _make_pre_act_value(self) -> str:
+    """Generate reflection based on current I_hat.
+
+    This runs AFTER post_observe completes (via pre_act), ensuring PF update has finished
+    and I_hat is available in memory. Only reflects if PF history exists (not first turn).
+    """
     memory = self.get_entity().get_component(
         self._memory_component_key, type_=IMPEMemoryComponent
     )
     goal = memory.get_goal()
     current_turn = len(memory.get_recent_conversation()) + 1
 
+    # Only reflect if PF history exists (not first turn)
     pf_history = memory.get_pf_history()
-    I_hat_last = pf_history[-1].get('I_hat', 0.5) if pf_history else 0.5
+    if not pf_history:
+      # First turn: no reflection yet
+      return ''
+
+    I_hat_last = pf_history[-1].get('I_hat', 0.5)
 
     context_prompt = ''
     if self._context and goal.role:
@@ -727,10 +740,6 @@ Write a short reflection: What will you change next turn to improve your goal ac
   def set_state(self, state: entity_component.ComponentState) -> None:
     """Set component state."""
     self._last_reflection = state.get('last_reflection', '')
-
-  def _make_pre_act_value(self) -> str:
-    """Make pre-act value."""
-    return ''
 
 
 class IMPEActComponent(entity_component.ActingComponent):
