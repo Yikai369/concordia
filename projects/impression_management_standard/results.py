@@ -130,6 +130,58 @@ def save_config(config: ConversationConfig, save_dir: str) -> None:
     print(f"✓ Saved config to {config_path}")
 
 
+def save_component_logs(sim, save_dir: str) -> str | None:
+    """Save Concordia component-level logs from all entities to JSON file.
+
+    Args:
+        sim: The Simulation object containing entities.
+        save_dir: Directory where the log file should be saved.
+
+    Returns:
+        Path to saved file, or None if no logs were found.
+    """
+    component_logs = {}
+    has_logs = False
+
+    for entity in sim.entities:
+        if hasattr(entity, 'get_all_logs'):
+            logs = entity.get_all_logs()
+
+            if logs:  # Only add if there are logs
+                has_logs = True
+                # Convert to serializable format
+                serializable_logs = {}
+                for channel, entries in logs.items():
+                    serializable_entries = []
+                    for entry in entries:
+                        # Convert non-serializable objects to strings
+                        if isinstance(entry, (str, int, float, bool, type(None))):
+                            serializable_entries.append(entry)
+                        elif isinstance(entry, (dict, list)):
+                            serializable_entries.append(entry)
+                        else:
+                            # Convert complex objects to string representation
+                            serializable_entries.append(str(entry))
+                    serializable_logs[channel] = serializable_entries
+
+                component_logs[entity.name] = {
+                    'channels': serializable_logs,
+                    'channel_count': len(serializable_logs),
+                    'total_entries': sum(len(entries) for entries in serializable_logs.values()),
+                }
+
+    if not has_logs:
+        return None
+
+    # Save to file
+    log_file = os.path.join(save_dir, 'component_logs.json')
+    with open(log_file, 'w', encoding='utf-8') as f:
+        json.dump(component_logs, f, indent=2, ensure_ascii=False)
+
+    print(f"✓ Saved component logs to {log_file}")
+    return log_file
+
+
 def save_results(
     config: ConversationConfig,
     turn_logs: list[TurnLog],

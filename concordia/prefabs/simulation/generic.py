@@ -48,6 +48,8 @@ class Simulation(simulation_lib.Simulation):
       model: language_model.LanguageModel,
       embedder: Callable[[str], np.ndarray],
       engine: engine_lib.Engine = sequential.Sequential(),
+      enable_information_flow_logging: bool = False,
+      information_flow_save_dir: str | None = None,
   ):
     """Initialize the simulation object.
 
@@ -65,6 +67,8 @@ class Simulation(simulation_lib.Simulation):
       model: the language model to use.
       embedder: the sentence transformer to use.
       engine: the engine to use, defaults to sequential.Sequential().
+      enable_information_flow_logging: Whether to enable information flow history logging.
+      information_flow_save_dir: Directory to save information flow history (optional).
     """
     self._config = config
     self._model = model
@@ -76,6 +80,15 @@ class Simulation(simulation_lib.Simulation):
     self._entity_to_prefab_config: dict[str, prefab_lib.InstanceConfig] = {}
     self._checkpoints_path = None
     self._checkpoint_counter = 0
+
+    # Initialize information flow history bank if enabled
+    if enable_information_flow_logging:
+      from concordia.utils import information_flow_history
+      self._information_flow_history = information_flow_history.InformationFlowHistoryBank(
+          save_dir=information_flow_save_dir,
+      )
+    else:
+      self._information_flow_history = None
 
     # All game masters share the same memory bank.
     self.game_master_memory_bank = associative_memory.AssociativeMemoryBank(
@@ -152,8 +165,21 @@ class Simulation(simulation_lib.Simulation):
     )
     game_master_prefab.params = instance_config.params
     game_master_prefab.entities = self.entities
+
+    # Wrap model with logging if history bank is available
+    model_to_use = self._model
+    if self._information_flow_history:
+      from concordia.language_model import logging_wrapper
+      # Get agent name from prefab params or use default
+      agent_name = instance_config.params.get('name', 'GameMaster')
+      model_to_use = logging_wrapper.LoggingLanguageModel(
+          model=self._model,
+          history_bank=self._information_flow_history,
+          agent_name=agent_name,
+      )
+
     game_master = game_master_prefab.build(
-        model=self._model, memory_bank=self.game_master_memory_bank
+        model=model_to_use, memory_bank=self.game_master_memory_bank
     )
 
     if any(gm.name == game_master.name for gm in self.game_masters):
@@ -182,7 +208,20 @@ class Simulation(simulation_lib.Simulation):
     memory_bank = associative_memory.AssociativeMemoryBank(
         sentence_embedder=self._embedder,
     )
-    entity = entity_prefab.build(model=self._model, memory_bank=memory_bank)
+
+    # Wrap model with logging if history bank is available
+    model_to_use = self._model
+    if self._information_flow_history:
+      from concordia.language_model import logging_wrapper
+      # Get agent name from prefab params or use default
+      agent_name = instance_config.params.get('name', 'Entity')
+      model_to_use = logging_wrapper.LoggingLanguageModel(
+          model=self._model,
+          history_bank=self._information_flow_history,
+          agent_name=agent_name,
+      )
+
+    entity = entity_prefab.build(model=model_to_use, memory_bank=memory_bank)
 
     if any(e.name == entity.name for e in self.entities):
       print(f"Entity {entity.name} already exists.")
@@ -268,6 +307,10 @@ class Simulation(simulation_lib.Simulation):
     ]
     sorted_game_masters = initializers + other_gms
 
+    # Note: Turn tracking is now handled in run_loop at the START of each step
+    # Turns start at 0 (initialization). First step interactions will be at turn 1,
+    # second step interactions will be at turn 2, etc.
+
     self._engine.run_loop(
         game_masters=sorted_game_masters,
         entities=self.entities,
@@ -276,6 +319,7 @@ class Simulation(simulation_lib.Simulation):
         verbose=True,
         log=raw_log,
         checkpoint_callback=checkpoint_callback,
+        information_flow_history=self._information_flow_history,
     )
 
     if not return_html_log:
@@ -432,6 +476,48 @@ class Simulation(simulation_lib.Simulation):
 
     # Update raw log
     self._raw_log = checkpoint.get("raw_log", [])
+
+  def save_information_flow_history(self, filepath: str | None = None) -> str | None:
+    """Save information flow history to JSON file.
+
+    Args:
+      filepath: Path to save file. If None, uses save_dir from initialization.
+
+    Returns:
+      Path to saved file, or None if history bank is not enabled.
+    """
+    if not self._information_flow_history:
+      return None
+    return self._information_flow_history.save_to_json(filepath)
+
+  def get_information_flow_history(
+      self, agent_name: str | None = None
+  ) -> dict[str, list] | list | None:
+    """Get information flow history for agent(s).
+
+    Args:
+      agent_name: Name of agent to get history for. If None, returns all agents.
+
+    Returns:
+      If agent_name is provided: list of ModelInteraction records for that agent.
+      If agent_name is None: dict mapping agent names to their interaction lists.
+      Returns None if history bank is not enabled.
+    """
+    if not self._information_flow_history:
+      return None
+
+    if agent_name:
+      return self._information_flow_history.get_agent_history(agent_name)
+    else:
+      return self._information_flow_history.get_all_history()
+
+  def get_information_flow_history_bank(self):
+    """Get the information flow history bank object.
+
+    Returns:
+      InformationFlowHistoryBank instance, or None if not enabled.
+    """
+    return self._information_flow_history
 
   def _load_entity_from_state(
       self,

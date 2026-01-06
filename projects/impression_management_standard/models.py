@@ -41,3 +41,7 @@ class ConversationConfig:
     local_model: str
     print_trace: bool = False  # Whether to print pretty trace
     no_plots: bool = False  # Whether to disable plotting
+    enable_info_flow_logging: bool = False  # Whether to enable information flow history logging
+    enable_simplified_log: bool = False  # Whether to generate simplified log (requires enable_info_flow_logging)
+    simplified_log_format: str = 'compact'  # Format: 'compact', 'markdown', or 'text'
+    save_component_logs: bool = False  # Whether to save Concordia component-level logs

@@ -45,12 +45,14 @@ def extract_turn_data_from_entities(
         type_=impe.IMPEMemoryComponent
     )
 
-    # Get conversation history
-    conversation = actor_memory.get_recent_conversation()
-    evaluations = audience_memory.get_recent_evaluations()
-    pf_history = actor_memory.get_pf_history()
-    reflections = actor_memory.get_recent_reflections()
-    pe_history = actor_memory.get_recent_pe_history()
+    # Get conversation history - use a large k to get all turns
+    # Use total_turns * 2 to ensure we get all entries (actor + audience utterances)
+    # Add extra buffer to handle any edge cases
+    conversation = actor_memory.get_recent_conversation(k=total_turns * 2 + 10)
+    evaluations = audience_memory.get_recent_evaluations(k=total_turns + 10)
+    pf_history = actor_memory.get_pf_history(k=total_turns + 10)
+    reflections = actor_memory.get_recent_reflections(k=total_turns + 10)
+    pe_history = actor_memory.get_recent_pe_history(k=total_turns + 10)
 
     # Debug: print what we found
     print(f"\nDebug: Found {len(conversation)} conversation entries")

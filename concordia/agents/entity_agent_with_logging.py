@@ -19,9 +19,11 @@ import types
 from typing import Any
 
 from concordia.agents import entity_agent
+from concordia.language_model import logging_wrapper
 from concordia.typing import entity as entity_lib
 from concordia.typing import entity_component
 from concordia.utils import measurements as measurements_lib
+from typing_extensions import override
 
 
 class EntityAgentWithLogging(entity_agent.EntityAgent,
@@ -84,3 +86,84 @@ class EntityAgentWithLogging(entity_agent.EntityAgent,
     for channel_name in sorted(self._component_logging.available_channels()):
       log[channel_name] = self._component_logging.get_last_datum(channel_name)
     return log
+
+  def _parallel_call_with_context(
+      self,
+      method_name: str,
+      component_name: str | None,
+      phase: str | None,
+      *args,
+      executor=None,
+  ) -> entity_component.ComponentContextMapping:
+    """Calls the named method in parallel on all components with context tracking."""
+    # Set context before parallel call
+    logging_wrapper.set_component_context(component_name, phase)
+    try:
+      results = super()._parallel_call_(method_name, *args, executor=executor)
+    finally:
+      logging_wrapper.clear_component_context()
+    return results
+
+  @override
+  def act(
+      self, action_spec: entity_lib.ActionSpec = entity_lib.DEFAULT_ACTION_SPEC
+  ) -> str:
+    """Act with component and phase context tracking."""
+    with self._control_lock:
+      # PRE_ACT phase
+      self._set_phase(entity_component.Phase.PRE_ACT)
+      # For pre_act, multiple context components may be called in parallel
+      # We can't easily track which specific component makes each model call,
+      # so we set a generic context. Individual components could set their own
+      # context if needed.
+      contexts = self._parallel_call_with_context(
+          'pre_act', None, 'pre_act', action_spec
+      )
+      self._context_processor.pre_act(types.MappingProxyType(contexts))
+
+      # ACT phase - set context for act component
+      act_component_name = self._act_component.__class__.__name__
+      logging_wrapper.set_component_context(act_component_name, 'act')
+      try:
+        action_attempt = self._act_component.get_action_attempt(
+            contexts, action_spec
+        )
+      finally:
+        logging_wrapper.clear_component_context()
+
+      # POST_ACT phase
+      self._set_phase(entity_component.Phase.POST_ACT)
+      contexts = self._parallel_call_with_context(
+          'post_act', None, 'post_act', action_attempt
+      )
+      self._context_processor.post_act(contexts)
+
+      # UPDATE phase
+      self._set_phase(entity_component.Phase.UPDATE)
+      self._parallel_call_with_context('update', None, None)
+
+      self._set_phase(entity_component.Phase.READY)
+
+      return action_attempt
+
+  @override
+  def observe(self, observation: str) -> None:
+    """Observe with component and phase context tracking."""
+    with self._control_lock:
+      # PRE_OBSERVE phase
+      self._set_phase(entity_component.Phase.PRE_OBSERVE)
+      contexts = self._parallel_call_with_context(
+          'pre_observe', None, 'observe', observation
+      )
+      self._context_processor.pre_observe(contexts)
+
+      # POST_OBSERVE phase
+      self._set_phase(entity_component.Phase.POST_OBSERVE)
+      contexts = self._parallel_call_with_context('post_observe', None, 'observe')
+      self._context_processor.post_observe(contexts)
+
+      # UPDATE phase
+      self._set_phase(entity_component.Phase.UPDATE)
+      self._parallel_call_with_context('update', None, None)
+
+      self._set_phase(entity_component.Phase.READY)

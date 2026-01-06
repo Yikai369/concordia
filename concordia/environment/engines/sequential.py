@@ -211,6 +211,7 @@ class Sequential(engine_lib.Engine):
       verbose: bool = False,
       log: list[Mapping[str, Any]] | None = None,
       checkpoint_callback: Callable[[int], None] | None = None,
+      information_flow_history: Any | None = None,
   ):
     """Run a game loop."""
     if not game_masters:
@@ -223,6 +224,13 @@ class Sequential(engine_lib.Engine):
       premise = f'{EVENT_TAG} {premise}'
       game_master.observe(premise)
     while not self.terminate(game_master, verbose) and steps < max_steps:
+      # Increment turns for all entities and game masters at START of step
+      # (before any interactions for this step)
+      if information_flow_history:
+        for entity in entities:
+          information_flow_history.increment_turn(entity.name)
+        for gm in game_masters:
+          information_flow_history.increment_turn(gm.name)
       if log is not None and hasattr(game_master, 'get_last_log'):
         assert hasattr(game_master, 'get_last_log')  # Assertion for pytype
         log_entry['terminate'] = game_master.get_last_log()

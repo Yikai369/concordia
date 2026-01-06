@@ -69,7 +69,11 @@ def main():
         config=sim_config,
         model=model,
         embedder=embedder,
+        enable_information_flow_logging=cfg.enable_info_flow_logging,
+        information_flow_save_dir=cfg.save_dir if cfg.enable_info_flow_logging else None,
     )
+    if cfg.enable_info_flow_logging:
+        print("✓ Information flow logging enabled")
     print("✓ Simulation initialized")
 
     # Run simulation using standard loop
@@ -91,6 +95,38 @@ def main():
         print("Warning: No turn data extracted. Check component state.")
     else:
         results.save_results(cfg, turn_logs)
+
+    # Save information flow history if enabled
+    if cfg.enable_info_flow_logging:
+        print("\nSaving information flow history...")
+        history_file = sim.save_information_flow_history()
+        if history_file:
+            print(f"✓ Saved information flow history to {history_file}")
+
+        # Save simplified log if enabled
+        if cfg.enable_simplified_log:
+            print("\nGenerating simplified log...")
+            history_bank = sim.get_information_flow_history_bank()
+            if history_bank:
+                try:
+                    simplified_file = history_bank.save_simplified_log(
+                        format=cfg.simplified_log_format,
+                    )
+                    print(f"✓ Saved simplified log to {simplified_file}")
+                except Exception as e:
+                    print(f"Warning: Failed to save simplified log: {e}")
+            else:
+                print("Warning: Information flow history bank not available for simplified log")
+
+    # Save component logs if enabled
+    if cfg.save_component_logs:
+        print("\nSaving component logs...")
+        try:
+            component_log_file = results.save_component_logs(sim, cfg.save_dir)
+            if component_log_file is None:
+                print("Note: No component logs found (components may not implement ComponentWithLogging)")
+        except Exception as e:
+            print(f"Warning: Failed to save component logs: {e}")
 
     return turn_logs
 

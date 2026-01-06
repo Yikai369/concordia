@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import math
 import random
 import re
+import threading
 from typing import Any
 
 from concordia.components.agent import action_spec_ignored
@@ -42,6 +43,23 @@ class EvaluationRecord:
   turn: int
   I_t: float  # True hidden state
   utterance: Utterance
+
+
+@dataclass
+class ObservationRecord:
+  """Record of what the agent observed."""
+  turn: int
+  observed_from: str  # Name of the agent who said/did this
+  text: str  # Observed utterance text
+  body: str = ''  # Observed body language
+
+
+@dataclass
+class ActionRecord:
+  """Record of what the agent said/did."""
+  turn: int
+  text: str  # Action/utterance text
+  body: str = ''  # Body language
 
 
 @dataclass
@@ -160,26 +178,146 @@ class IMPEMemoryComponent(
   ):
     """Initialize IMPE memory component."""
     super().__init__(goal=goal, recent_k=recent_k, pre_act_label=pre_act_label)
+    self._lock = threading.Lock()  # Thread safety lock
     self._evaluation_history: list[EvaluationRecord] = []
     self._pf_particles: list[float] = []
     self._pf_weights: list[float] = []
     self._pf_history: list[dict[str, Any]] = []
+    self._observation_history: list[ObservationRecord] = []
+    self._action_history: list[ActionRecord] = []
 
   def add_utterance(
       self, turn: int, speaker: str, text: str, body: str = ''
   ) -> None:
     """Add conversation utterance with body language."""
-    self._conversation.append(
-        Utterance(turn=turn, speaker=speaker, text=text, body=body)
-    )
+    with self._lock:
+      self._conversation.append(
+          Utterance(turn=turn, speaker=speaker, text=text, body=body)
+      )
+
+  def add_observation(
+      self, turn: int, observed_from: str, text: str, body: str = ''
+  ) -> None:
+    """Add observation record (what the agent observed from others)."""
+    with self._lock:
+      self._observation_history.append(
+          ObservationRecord(
+              turn=turn, observed_from=observed_from, text=text, body=body
+          )
+      )
+
+  def add_action(
+      self, turn: int, text: str, body: str = ''
+  ) -> None:
+    """Add action record (what the agent said/did)."""
+    with self._lock:
+      self._action_history.append(
+          ActionRecord(turn=turn, text=text, body=body)
+      )
+
+  def get_recent_observations(
+      self, k: int | None = None
+  ) -> list[ObservationRecord]:
+    """Get recent observation records."""
+    if k is None:
+      k = self._recent_k
+    with self._lock:
+      return self._observation_history[-k:].copy()  # Return copy to avoid holding lock
+
+  def get_recent_actions(
+      self, k: int | None = None
+  ) -> list[ActionRecord]:
+    """Get recent action records."""
+    if k is None:
+      k = self._recent_k
+    with self._lock:
+      return self._action_history[-k:].copy()  # Return copy to avoid holding lock
+
+  def format_turn_history(
+      self, turn: int, include_outcome: bool = True
+  ) -> str:
+    """Format history for a specific turn in the required format.
+
+    Format: "At turn X, you observed Y, you did Z, and the outcome is T"
+
+    Args:
+      turn: Turn number to format.
+      include_outcome: Whether to include outcome (I_t, I_hat, PE).
+
+    Returns:
+      Formatted history string for the turn.
+    """
+    with self._lock:
+      # Get observation for this turn
+      obs = next(
+          (o for o in self._observation_history if o.turn == turn), None
+      )
+      obs_text = 'nothing (first turn)' if not obs else (
+          f'"{obs.text}" from {obs.observed_from}'
+          + (f' (body: "{obs.body}")' if obs.body else '')
+      )
+
+      # Get action for this turn
+      action = next(
+          (a for a in self._action_history if a.turn == turn), None
+      )
+      action_text = 'nothing' if not action else (
+          f'"{action.text}"'
+          + (f' (body: "{action.body}")' if action.body else '')
+      )
+
+      # Get outcome if requested
+      outcome_text = ''
+      if include_outcome:
+        # Get I_t from evaluation history
+        eval_rec = next(
+            (e for e in self._evaluation_history if e.turn == turn), None
+        )
+        I_t = eval_rec.I_t if eval_rec else None
+
+        # Get I_hat and PE from PF history
+        pf_entry = next(
+            (p for p in self._pf_history if p.get('turn') == turn), None
+        )
+        I_hat = pf_entry.get('I_hat') if pf_entry else None
+
+        # Get PE from PE history
+        pe_rec = next(
+            (p for p in self._pe_history if p.turn == turn), None
+        )
+        PE = pe_rec.pe if pe_rec else None
+
+        # Format outcome
+        outcome_parts = []
+        if I_t is not None:
+          outcome_parts.append(f'I_t={I_t:.2f}')
+        if I_hat is not None:
+          outcome_parts.append(f'I_hat={I_hat:.2f}')
+        if PE is not None:
+          outcome_parts.append(f'PE={PE:+.2f}')
+
+        if outcome_parts:
+          outcome_text = ', '.join(outcome_parts)
+        else:
+          outcome_text = 'no outcome data'
+
+      # Build formatted string
+      result = f'At turn {turn}, you observed {obs_text}, you did {action_text}'
+      if include_outcome and outcome_text:
+        result += f', and the outcome is {outcome_text}.'
+      else:
+        result += '.'
+
+      return result
 
   def add_evaluation_record(
       self, turn: int, I_t: float, utterance: Utterance
   ) -> None:
     """Add evaluation record."""
-    self._evaluation_history.append(
-        EvaluationRecord(turn=turn, I_t=I_t, utterance=utterance)
-    )
+    with self._lock:
+      self._evaluation_history.append(
+          EvaluationRecord(turn=turn, I_t=I_t, utterance=utterance)
+      )
 
   def get_recent_evaluations(
       self, k: int | None = None
@@ -187,7 +325,8 @@ class IMPEMemoryComponent(
     """Get recent evaluation records."""
     if k is None:
       k = self._recent_k
-    return self._evaluation_history[-k:]
+    with self._lock:
+      return self._evaluation_history[-k:].copy()  # Return copy to avoid holding lock
 
   def update_particle_filter_state(
       self,
@@ -195,22 +334,25 @@ class IMPEMemoryComponent(
       weights: list[float],
       history_entry: dict[str, Any],
   ) -> None:
-    """Update particle filter state."""
-    self._pf_particles = list(particles)
-    self._pf_weights = list(weights)
-    self._pf_history.append(history_entry)
+    """Update particle filter state (atomic operation)."""
+    with self._lock:
+      self._pf_particles = list(particles)
+      self._pf_weights = list(weights)
+      self._pf_history.append(history_entry)
 
   def get_pf_history(self, k: int | None = None) -> list[dict[str, Any]]:
     """Get recent particle filter history."""
     if k is None:
       k = self._recent_k
-    return self._pf_history[-k:]
+    with self._lock:
+      return self._pf_history[-k:].copy()  # Return copy to avoid holding lock
 
   def get_pf_state(
       self,
   ) -> tuple[list[float], list[float]]:
     """Get current particle filter state."""
-    return (list(self._pf_particles), list(self._pf_weights))
+    with self._lock:
+      return (list(self._pf_particles), list(self._pf_weights))
 
   def format_conversation(self, utterances: list[Utterance]) -> str:
     """Format conversation for prompts."""
@@ -220,27 +362,88 @@ class IMPEMemoryComponent(
         f'- [t={u.turn} {u.speaker}] {u.text}' for u in utterances
     )
 
+  # Override parent class methods to add thread safety
+  def add_pe_record(
+      self, turn: int, partner_text: str, estimate: float, pe: float
+  ) -> None:
+    """Add a PE record (thread-safe override)."""
+    with self._lock:
+      # Access parent's _pe_history directly (parent doesn't have locks)
+      self._pe_history.append(
+          PERecord(
+              turn=turn, partner_text=partner_text, estimate=estimate, pe=pe
+          )
+      )
+
+  def add_reflection(self, turn: int, text: str) -> None:
+    """Add a reflection (thread-safe override)."""
+    with self._lock:
+      # Access parent's _reflections directly (parent doesn't have locks)
+      self._reflections.append(ReflectionRecord(turn=turn, text=text))
+
+  def get_recent_conversation(self, k: int | None = None) -> list[Utterance]:
+    """Get recent conversation entries (thread-safe override)."""
+    if k is None:
+      k = self._recent_k
+    with self._lock:
+      # Access parent's _conversation directly (parent doesn't have locks)
+      return self._conversation[-k:].copy()  # Return copy to avoid holding lock
+
+  def get_recent_pe_history(self, k: int | None = None) -> list[PERecord]:
+    """Get recent PE history (thread-safe override)."""
+    if k is None:
+      k = self._recent_k
+    with self._lock:
+      # Access parent's _pe_history directly (parent doesn't have locks)
+      return self._pe_history[-k:].copy()  # Return copy to avoid holding lock
+
+  def get_recent_reflections(
+      self, k: int | None = None
+  ) -> list[ReflectionRecord]:
+    """Get recent reflections (thread-safe override)."""
+    if k is None:
+      k = self._recent_k
+    with self._lock:
+      # Access parent's _reflections directly (parent doesn't have locks)
+      return self._reflections[-k:].copy()  # Return copy to avoid holding lock
+
   def get_state(self) -> entity_component.ComponentState:
-    """Get component state for checkpointing."""
-    base_state = super().get_state()
-    base_state['evaluation_history'] = [
-        asdict(e) for e in self._evaluation_history
-    ]
-    base_state['pf_particles'] = self._pf_particles
-    base_state['pf_weights'] = self._pf_weights
-    base_state['pf_history'] = self._pf_history
-    return base_state
+    """Get component state for checkpointing (atomic snapshot)."""
+    with self._lock:
+      base_state = super().get_state()
+      base_state['evaluation_history'] = [
+          asdict(e) for e in self._evaluation_history
+      ]
+      base_state['pf_particles'] = list(self._pf_particles)
+      base_state['pf_weights'] = list(self._pf_weights)
+      base_state['pf_history'] = list(self._pf_history)
+      base_state['observation_history'] = [
+          asdict(o) for o in self._observation_history
+      ]
+      base_state['action_history'] = [
+          asdict(a) for a in self._action_history
+      ]
+      return base_state
 
   def set_state(self, state: entity_component.ComponentState) -> None:
-    """Set component state from checkpoint."""
-    super().set_state(state)
-    self._evaluation_history = [
-        EvaluationRecord(**e)
-        for e in state.get('evaluation_history', [])
-    ]
-    self._pf_particles = state.get('pf_particles', [])
-    self._pf_weights = state.get('pf_weights', [])
-    self._pf_history = state.get('pf_history', [])
+    """Set component state from checkpoint (atomic operation)."""
+    with self._lock:
+      super().set_state(state)
+      self._evaluation_history = [
+          EvaluationRecord(**e)
+          for e in state.get('evaluation_history', [])
+      ]
+      self._pf_particles = list(state.get('pf_particles', []))
+      self._pf_weights = list(state.get('pf_weights', []))
+      self._pf_history = list(state.get('pf_history', []))
+      self._observation_history = [
+          ObservationRecord(**o)
+          for o in state.get('observation_history', [])
+      ]
+      self._action_history = [
+          ActionRecord(**a)
+          for a in state.get('action_history', [])
+      ]
 
 
 class CulturalNormsComponent(
@@ -259,10 +462,35 @@ class CulturalNormsComponent(
     self._norms = norms or []
     self._initialized = False
 
-  def get_norms_text(self) -> str:
-    """Format norms as prompt text."""
+  def get_norms_text(self, agent_name: str | None = None) -> str:
+    """Format norms as prompt text with full initialization context.
+
+    Args:
+        agent_name: Name of the agent (optional, for initialization context).
+                    If None, only returns norms list (backward compatible).
+
+    Returns:
+        Formatted text with initialization context and norms list.
+    """
     if not self._norms:
       return ''
+
+    # Build norms description
+    norms_desc = '\n'.join(
+        f'- {n.name}: {n.description}' for n in self._norms
+    )
+
+    # If agent_name is provided, include full initialization context
+    if agent_name:
+        return f"""You are {agent_name}. You are in an alternative world in the year 3025 where there is a new set of cultural norms. In all your interactions, you must follow these cultural norms:
+
+{norms_desc}
+
+If you fail to do so, you will be unsuccessful in your interactions and perceived negatively by others. Always follow these norms strictly.
+
+"""
+
+    # Backward compatible: return just norms list if no agent_name
     lines = ['CULTURAL NORMS YOU FOLLOW:']
     for norm in self._norms:
       lines.append(f'- {norm.name}: {norm.description}')
@@ -302,7 +530,10 @@ If you fail to do so, you will be unsuccessful in your interactions and perceive
 
   def _make_pre_act_value(self) -> str:
     """Make pre-act value."""
-    return self.get_norms_text()
+    # Get agent name from entity if available
+    entity = self.get_entity()
+    agent_name = entity.name if entity else None
+    return self.get_norms_text(agent_name)
 
 
 class PersonalityTraitsComponent(
@@ -391,19 +622,44 @@ class IMPEAudienceEvaluationComponent(
       self._last_actor_body = body_match.group(1)
     else:
       self._last_actor_body = ''
+
+    # Store observation in memory
+    memory = self.get_entity().get_component(
+        self._memory_component_key, type_=IMPEMemoryComponent
+    )
+    if memory and self._last_actor_text:
+      # Get current turn (next turn number)
+      current_turn = len(memory.get_recent_conversation()) + 1
+      # Try to get actor name from most recent conversation entry
+      # (the person who just spoke is the one we're observing)
+      conv = memory.get_recent_conversation()
+      actor_name = 'Actor'  # Default fallback
+      if conv:
+        # The most recent speaker is the one we're observing
+        actor_name = conv[-1].speaker
+      memory.add_observation(
+          turn=current_turn,
+          observed_from=actor_name,
+          text=self._last_actor_text,
+          body=self._last_actor_body,
+      )
+
     return ''
 
   def _get_prompt_header(self) -> str:
     """Get prompt header with norms and traits."""
     header_parts = []
+    entity = self.get_entity()
+    agent_name = entity.name if entity else None
     if self._cultural_norms_key:
-      norms_comp = self.get_entity().get_component(
+      norms_comp = entity.get_component(
           self._cultural_norms_key, type_=CulturalNormsComponent
       )
       if norms_comp:
-        header_parts.append(norms_comp.get_norms_text())
+        # Pass agent name to include full initialization context
+        header_parts.append(norms_comp.get_norms_text(agent_name))
     if self._personality_traits_key:
-      traits_comp = self.get_entity().get_component(
+      traits_comp = entity.get_component(
           self._personality_traits_key, type_=PersonalityTraitsComponent
       )
       if traits_comp:
@@ -764,14 +1020,17 @@ class IMPEActComponent(entity_component.ActingComponent):
   def _get_prompt_header(self) -> str:
     """Get prompt header with norms and traits."""
     header_parts = []
+    entity = self.get_entity()
+    agent_name = entity.name if entity else None
     if self._cultural_norms_key:
-      norms_comp = self.get_entity().get_component(
+      norms_comp = entity.get_component(
           self._cultural_norms_key, type_=CulturalNormsComponent
       )
       if norms_comp:
-        header_parts.append(norms_comp.get_norms_text())
+        # Pass agent name to include full initialization context
+        header_parts.append(norms_comp.get_norms_text(agent_name))
     if self._personality_traits_key:
-      traits_comp = self.get_entity().get_component(
+      traits_comp = entity.get_component(
           self._personality_traits_key, type_=PersonalityTraitsComponent
       )
       if traits_comp:
@@ -853,6 +1112,9 @@ BODY: <brief body language phrase>
 
     # Store utterance
     memory.add_utterance(current_turn, self.get_entity().name, text, body)
+
+    # Store action in action history
+    memory.add_action(current_turn, text, body)
 
     # Return formatted action
     return f'DIALOGUE: {text}\nBODY: {body}'

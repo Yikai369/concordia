@@ -112,7 +112,33 @@ def parse_arguments() -> ConversationConfig:
         action='store_true',
         help='Disable plotting (default: plots are generated if matplotlib is available).',
     )
+    parser.add_argument(
+        '--enable_info_flow_logging',
+        action='store_true',
+        help='Enable information flow history logging (captures all LLM prompts and responses).',
+    )
+    parser.add_argument(
+        '--enable_simplified_log',
+        action='store_true',
+        help='Enable simplified information flow log (human-readable format). Requires --enable_info_flow_logging.',
+    )
+    parser.add_argument(
+        '--simplified_log_format',
+        type=str,
+        default='compact',
+        choices=['compact', 'markdown', 'text'],
+        help='Format for simplified log: compact (one line per interaction), markdown (structured), or text (indented).',
+    )
+    parser.add_argument(
+        '--save_component_logs',
+        action='store_true',
+        help='Save Concordia component-level logs to JSON file (component state and behavior logs).',
+    )
     args = parser.parse_args()
+
+    # Validate: simplified log requires info flow logging
+    if args.enable_simplified_log and not args.enable_info_flow_logging:
+        parser.error("--enable_simplified_log requires --enable_info_flow_logging")
 
     # Create output directory
     save_dir = utils.create_output_directory(args.save_dir)
@@ -135,6 +161,10 @@ def parse_arguments() -> ConversationConfig:
         local_model=args.local_model,
         print_trace=args.pretty_trace,
         no_plots=args.no_plots,
+        enable_info_flow_logging=args.enable_info_flow_logging,
+        enable_simplified_log=args.enable_simplified_log,
+        simplified_log_format=args.simplified_log_format,
+        save_component_logs=args.save_component_logs,
     )
 
 
