@@ -178,7 +178,7 @@ class IMPEMemoryComponent(
   ):
     """Initialize IMPE memory component."""
     super().__init__(goal=goal, recent_k=recent_k, pre_act_label=pre_act_label)
-    self._lock = threading.Lock()  # Thread safety lock
+    self._lock = threading.RLock()  # Thread safety lock (RLock is reentrant to prevent deadlocks)
     self._evaluation_history: list[EvaluationRecord] = []
     self._pf_particles: list[float] = []
     self._pf_weights: list[float] = []
@@ -1041,6 +1041,7 @@ class IMPEActComponent(entity_component.ActingComponent):
       self,
       context: entity_component.ComponentContextMapping,
       action_spec: entity_lib.ActionSpec,
+      skip_memory_update: bool = False,
   ) -> str:
     """Generate utterance based on belief."""
     memory = self.get_entity().get_component(
@@ -1049,8 +1050,10 @@ class IMPEActComponent(entity_component.ActingComponent):
     goal = memory.get_goal()
     recent_k = memory._recent_k
 
+    # Get conversation once to avoid multiple lock acquisitions
+    conversation = memory.get_recent_conversation()
     pf_history = memory.get_pf_history()
-    current_turn = len(memory.get_recent_conversation()) + 1
+    current_turn = len(conversation) + 1
 
     audience_name = 'interviewer' if self._context else 'listener'
     context_prompt = ''
@@ -1072,7 +1075,8 @@ BODY: <brief body language phrase>
 """
     else:
       # Subsequent turns: use belief
-      conv_k = memory.get_recent_conversation()
+      # Reuse conversation we already fetched
+      conv_k = conversation
       ihat_k = memory.get_pf_history(recent_k)
       refl_k = memory.get_recent_reflections(recent_k)
       I_hat = pf_history[-1].get('I_hat', 0.5)
@@ -1104,20 +1108,31 @@ DIALOGUE: <one sentence>
 BODY: <brief body language phrase>
 """
 
-    raw = self._model.sample_text(prompt).strip()
+    try:
+      raw = self._model.sample_text(prompt).strip()
+    except Exception as e:
+      # If LLM call fails, return a fallback response
+      print(f"Warning: LLM call failed in IMPEActComponent: {e}")
+      import traceback
+      traceback.print_exc()
+      text = f"I need to respond to the {audience_name}."
+      body = "Maintains neutral posture"
+      raw = f'DIALOGUE: {text}\nBODY: {body}'
+
     m1 = re.search(r'DIALOGUE:\s*(.*)', raw)
     m2 = re.search(r'BODY:\s*(.*)', raw)
     text = m1.group(1).strip() if m1 else raw
     body = m2.group(1).strip() if m2 else ''
 
-    # Store utterance
-    memory.add_utterance(current_turn, self.get_entity().name, text, body)
+    # Store utterance and action (unless skip_memory_update is True)
+    if not skip_memory_update:
+      memory.add_utterance(current_turn, self.get_entity().name, text, body)
+      memory.add_action(current_turn, text, body)
 
-    # Store action in action history
-    memory.add_action(current_turn, text, body)
-
-    # Return formatted action
-    return f'DIALOGUE: {text}\nBODY: {body}'
+    # Return formatted action - the game master will convert this to the expected format
+    # Format: "{name} -- \"{text}\"" to match action_spec expectations
+    entity_name = self.get_entity().name
+    return f'{entity_name} -- "{text}"'
 
   def get_state(self) -> entity_component.ComponentState:
     """Get component state."""
@@ -1125,4 +1140,263 @@ BODY: <brief body language phrase>
 
   def set_state(self, state: entity_component.ComponentState) -> None:
     """Set component state."""
+    pass
+
+
+class IMPESelfAssessmentComponent(
+    entity_component.ActingComponent, entity_component.ComponentWithLogging
+):
+  """Self-assessment component that ensures responses align with background info.
+
+  This component wraps IMPEActComponent and:
+  1. Assesses consistency of generated responses with traits, norms, and goals
+  2. Optionally revises responses when inconsistencies are detected
+  3. Logs assessment results for analysis
+  """
+
+  def __init__(
+      self,
+      base_act_component: IMPEActComponent,
+      model: language_model.LanguageModel,
+      memory_component_key: str = DEFAULT_IMPE_MEMORY_COMPONENT_KEY,
+      cultural_norms_key: str | None = None,
+      personality_traits_key: str | None = None,
+      consistency_threshold: float = 0.7,
+      enable_revision: bool = True,
+  ):
+    """Initialize self-assessment component.
+
+    Args:
+      base_act_component: The base IMPEActComponent to wrap.
+      model: Language model for assessment and revision.
+      memory_component_key: Key for memory component.
+      cultural_norms_key: Key for cultural norms component (optional).
+      personality_traits_key: Key for personality traits component (optional).
+      consistency_threshold: Minimum consistency score (0-1) to accept response.
+      enable_revision: Whether to revise responses when inconsistent.
+    """
+    super().__init__()
+    self._base_act_component = base_act_component
+    self._model = model
+    self._memory_component_key = memory_component_key
+    self._cultural_norms_key = cultural_norms_key
+    self._personality_traits_key = personality_traits_key
+    self._consistency_threshold = consistency_threshold
+    self._enable_revision = enable_revision
+
+  def set_entity(self, entity: entity_component.EntityWithComponents) -> None:
+    """Set the entity for both this component and the base component."""
+    super().set_entity(entity)
+    # Also set entity on base component so it can access other components
+    self._base_act_component.set_entity(entity)
+
+  def _get_prompt_header(self) -> str:
+    """Get prompt header with norms and traits."""
+    norms_text = ''
+    if self._cultural_norms_key:
+      norms_comp = self.get_entity().get_component(
+          self._cultural_norms_key, type_=CulturalNormsComponent
+      )
+      if norms_comp:
+        norms_text = norms_comp.get_norms_text(
+            agent_name=self.get_entity().name
+        ) + '\n\n'
+
+    traits_text = ''
+    if self._personality_traits_key:
+      traits_comp = self.get_entity().get_component(
+          self._personality_traits_key, type_=PersonalityTraitsComponent
+      )
+      if traits_comp:
+        traits_text = traits_comp.get_traits_text() + '\n\n'
+
+    return norms_text + traits_text
+
+  def get_action_attempt(
+      self,
+      context: entity_component.ComponentContextMapping,
+      action_spec: entity_lib.ActionSpec,
+  ) -> str:
+    """Generate action with self-assessment and optional revision."""
+    # Step 0: Collect context information first
+    memory = self.get_entity().get_component(
+        self._memory_component_key, type_=IMPEMemoryComponent
+    )
+    goal = memory.get_goal()
+    recent_k = memory._recent_k
+
+    # Get conversation to calculate turn (base component won't modify it due to skip_memory_update=True)
+    conversation = memory.get_recent_conversation()
+    current_turn = len(conversation) + 1
+    pf_history = memory.get_pf_history()
+    refl_k = memory.get_recent_reflections(recent_k)
+    conv_k = conversation
+    I_hat = pf_history[-1].get('I_hat', 0.5) if pf_history else 0.5
+
+    # Step 1: Get original response (skip memory update - we'll handle it)
+    original_response = self._base_act_component.get_action_attempt(
+        context, action_spec, skip_memory_update=True
+    )
+
+    # Parse original response
+    m1 = re.search(r'DIALOGUE:\s*(.*)', original_response)
+    m2 = re.search(r'BODY:\s*(.*)', original_response)
+    if not m1:
+      # Try parsing format: "{name} -- \"{text}\""
+      name_match = re.search(r'(\w+)\s*--\s*"(.*)"', original_response)
+      if name_match:
+        original_text = name_match.group(2).strip()
+        original_body = ''
+      else:
+        original_text = original_response.strip()
+        original_body = ''
+    else:
+      original_text = m1.group(1).strip()
+      original_body = m2.group(1).strip() if m2 else ''
+
+    # Step 2: Get norms and traits text
+    norms_text = self._get_prompt_header()
+
+    # Step 3: Assess consistency
+    assessment_prompt = f"""{norms_text}You are {self.get_entity().name}. Your goal: {goal.name}.
+Goal definition: {goal.description}.
+
+Recent context:
+- Current belief (I_hat): {I_hat:.2f}
+- Recent reflections: {chr(10).join(f"- (turn {r.turn}) {r.text}" for r in refl_k[-2:]) or "- (none)"}
+- Recent conversation: {memory.format_conversation(conv_k[-2:])}
+
+You generated this response:
+DIALOGUE: {original_text}
+BODY: {original_body}
+
+Assess whether this response is consistent with:
+1. Your personality traits (above)
+2. Your cultural norms (above)
+3. Your goal and current belief
+4. Your recent reflections
+
+Rate the consistency on a scale from 0.0 to 1.0, where:
+- 1.0 = Fully consistent with all background information
+- 0.5 = Partially consistent, some misalignment
+- 0.0 = Completely inconsistent
+
+Respond in this exact format:
+CONSISTENCY_SCORE: <0.0-1.0>
+IS_ACCEPTABLE: <yes/no>
+FEEDBACK: <brief comment on what is inconsistent and how to fix it>
+"""
+
+    try:
+      assessment_raw = self._model.sample_text(assessment_prompt).strip()
+    except Exception as e:
+      print(f"Warning: Self-assessment LLM call failed: {e}")
+      # If assessment fails, accept the original response
+      consistency_score = 1.0
+      is_acceptable = True
+      feedback = "Assessment failed, accepting original response"
+      assessment_raw = ""
+
+    # Parse assessment
+    score_match = re.search(r'CONSISTENCY_SCORE:\s*([01](?:\.\d+)?)', assessment_raw)
+    acceptable_match = re.search(
+        r'IS_ACCEPTABLE:\s*(yes|no)', assessment_raw, re.IGNORECASE
+    )
+    feedback_match = re.search(
+        r'FEEDBACK:\s*(.*?)(?:\n|$)', assessment_raw, re.DOTALL
+    )
+
+    consistency_score = (
+        float(score_match.group(1)) if score_match else self._consistency_threshold
+    )
+    is_acceptable = (
+        acceptable_match.group(1).lower() == 'yes'
+        if acceptable_match
+        else consistency_score >= self._consistency_threshold
+    )
+    feedback = (
+        feedback_match.group(1).strip()
+        if feedback_match
+        else 'No feedback provided'
+    )
+
+    # Step 4: Revise if necessary
+    final_text = original_text
+    final_body = original_body
+    was_revised = False
+
+    if not is_acceptable and self._enable_revision:
+      revision_prompt = f"""{norms_text}You are {self.get_entity().name}. Your goal: {goal.name}.
+Goal definition: {goal.description}.
+
+Recent context:
+- Current belief (I_hat): {I_hat:.2f}
+- Recent reflections: {chr(10).join(f"- (turn {r.turn}) {r.text}" for r in refl_k[-2:]) or "- (none)"}
+
+You previously generated this response:
+DIALOGUE: {original_text}
+BODY: {original_body}
+
+However, this response was assessed as inconsistent with your background information.
+Assessment feedback: {feedback}
+
+Generate a REVISED response that:
+1. Maintains the core message/intent of the original
+2. Better aligns with your personality traits
+3. Better follows your cultural norms
+4. Better supports your goal achievement
+5. Incorporates the feedback above
+
+Output in this format exactly:
+DIALOGUE: <revised one sentence>
+BODY: <revised brief body language phrase>
+"""
+
+      try:
+        revision_raw = self._model.sample_text(revision_prompt).strip()
+        m1 = re.search(r'DIALOGUE:\s*(.*)', revision_raw)
+        m2 = re.search(r'BODY:\s*(.*)', revision_raw)
+        if m1:
+          final_text = m1.group(1).strip()
+        else:
+          # If revision doesn't provide DIALOGUE, keep original
+          final_text = original_text
+        if m2:
+          final_body = m2.group(1).strip()
+        else:
+          # If revision doesn't provide BODY, keep original
+          final_body = original_body
+        was_revised = True
+      except Exception as e:
+        print(f"Warning: Self-assessment revision LLM call failed: {e}")
+        # Keep original response if revision fails
+        was_revised = False
+
+    # Step 5: Log assessment results
+    self._logging_channel({
+        'Key': 'Self-Assessment',
+        'Consistency Score': consistency_score,
+        'Is Acceptable': is_acceptable,
+        'Was Revised': was_revised,
+        'Feedback': feedback,
+        'Original Response': f'DIALOGUE: {original_text}\nBODY: {original_body}',
+        'Final Response': f'DIALOGUE: {final_text}\nBODY: {final_body}',
+    })
+
+    # Step 6: Update memory with final utterance and action
+    memory.add_utterance(current_turn, self.get_entity().name, final_text, final_body)
+    memory.add_action(current_turn, final_text, final_body)
+
+    # Return final response in the expected format
+    entity_name = self.get_entity().name
+    return f'{entity_name} -- "{final_text}"'
+
+  def get_state(self) -> entity_component.ComponentState:
+    """Get component state."""
+    # Self-assessment component doesn't maintain state beyond what's in memory
+    return {}
+
+  def set_state(self, state: entity_component.ComponentState) -> None:
+    """Set component state."""
+    # Self-assessment component doesn't maintain state beyond what's in memory
     pass

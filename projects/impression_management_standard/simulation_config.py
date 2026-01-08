@@ -85,6 +85,9 @@ def create_simulation_config(
                 'cultural_norms': None,  # Actor doesn't have norms
                 'traits': traits,
                 'trait_scores': trait_scores_actor,
+                'enable_self_assessment': config.enable_self_assessment,
+                'consistency_threshold': config.consistency_threshold,
+                'disable_revision': config.disable_revision,
             },
         ),
         # Audience entity (simple version for standard loop)

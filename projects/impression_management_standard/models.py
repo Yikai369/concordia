@@ -45,3 +45,6 @@ class ConversationConfig:
     enable_simplified_log: bool = False  # Whether to generate simplified log (requires enable_info_flow_logging)
     simplified_log_format: str = 'compact'  # Format: 'compact', 'markdown', or 'text'
     save_component_logs: bool = False  # Whether to save Concordia component-level logs
+    enable_self_assessment: bool = False  # Whether to enable self-assessment component
+    consistency_threshold: float = 0.7  # Minimum consistency score (0-1) to accept response without revision
+    disable_revision: bool = False  # Whether to disable revision of inconsistent responses (only log assessments)

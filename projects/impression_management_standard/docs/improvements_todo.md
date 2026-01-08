@@ -361,6 +361,128 @@ Implement `IMPESelfAssessmentComponent` as a wrapper around `IMPEActComponent` t
 
 ---
 
+## Agent Identity and Self-Awareness Questions
+
+**Issue**: Agents in the impression_management_standard project are not asked the standard identity and self-awareness questions that are commonly used in Concordia framework examples. This may reduce agent self-awareness and consistency.
+
+**Current Behavior**:
+- Agents receive goal information, cultural norms, personality traits, conversation history, and reflections
+- Agents are told "You are {name}" but are not explicitly asked to reflect on their identity
+- No explicit questions about "who you are", "what kind of person you are", or "what situation you are in"
+- No role-playing instructions component that explains the experimental context
+
+**Standard Questions in Examples**:
+Examples in the Concordia framework commonly use these components:
+
+1. **Instructions Component** (`concordia/components/agent/instructions.py`):
+   - Provides role-playing instructions: "This is a social science experiment... play the role of {agent_name} as accurately as possible... Always use third-person limited perspective."
+   - Explains the experimental context and expectations
+   - Helps agents understand they are playing a character in a simulation
+
+2. **SelfPerception Component** (`concordia/components/agent/question_of_recent_memories.py`):
+   - Asks: "What kind of person is {agent_name}?"
+   - Helps agents develop and maintain a consistent self-concept
+   - Answers are generated based on recent memories and observations
+
+3. **SituationPerception Component**:
+   - Asks: "What kind of situation is {agent_name} in right now?"
+   - Helps agents understand their current context
+   - Answers consider observations, somatic state, and relevant memories
+
+4. **PersonBySituation Component**:
+   - Asks: "What would a person like {agent_name} do in a situation like this?"
+   - Helps agents reason about appropriate actions based on their identity and situation
+   - Combines self-perception and situation perception
+
+**Problem**:
+- **Reduced Self-Awareness**: Agents may not develop a clear sense of their identity without explicit self-perception questions
+- **Inconsistent Behavior**: Without asking "who am I?", agents may not maintain consistent character traits
+- **Missing Context**: Lack of Instructions component means agents don't understand the experimental/simulation context
+- **Less Grounded Actions**: Without situation perception, agents may not fully understand their current context
+- **Framework Misalignment**: Not following standard Concordia patterns used in examples
+
+**Ideal Behavior**:
+Agents should be asked (via components that provide context in `pre_act`):
+1. **Role-Playing Instructions**: Understand they are in a social science experiment, playing a character
+2. **Self-Perception**: "What kind of person am I?" - based on traits, norms, and recent behavior
+3. **Situation Perception**: "What kind of situation am I in right now?" - based on observations and context
+4. **Person-by-Situation**: "What would a person like me do in this situation?" - guides action selection
+
+**Solution**:
+Add standard Concordia identity and self-awareness components to the actor prefab:
+
+1. **Add Instructions Component**:
+   ```python
+   from concordia.components.agent import instructions
+
+   instructions_comp = instructions.Instructions(
+       agent_name=entity_name,
+       pre_act_label='\nRole playing instructions',
+   )
+   ```
+
+2. **Add SelfPerception Component** (optional, but recommended):
+   ```python
+   from concordia.components.agent.question_of_recent_memories import SelfPerception
+
+   self_perception = SelfPerception(
+       model=model,
+       pre_act_label=f'\nQuestion: What kind of person is {entity_name}?\nAnswer',
+   )
+   ```
+
+3. **Add SituationPerception Component** (optional):
+   ```python
+   from concordia.components.agent.question_of_recent_memories import SituationPerception
+
+   situation_perception = SituationPerception(
+       model=model,
+       components={
+           'Observation': observation_component,
+           # ... other context components
+       },
+       pre_act_label=f'\nQuestion: What kind of situation is {entity_name} in right now?\nAnswer',
+   )
+   ```
+
+4. **Add PersonBySituation Component** (optional):
+   ```python
+   from concordia.components.agent.question_of_recent_memories import PersonBySituation
+
+   person_by_situation = PersonBySituation(
+       model=model,
+       components={
+           'SelfPerception': self_perception,
+           'SituationPerception': situation_perception,
+       },
+       pre_act_label=f'\nQuestion: What would a person like {entity_name} do in a situation like this?\nAnswer',
+   )
+   ```
+
+**Implementation Considerations**:
+- **Instructions Component**: Should be added as a high-priority component (provides essential context)
+- **SelfPerception**: Can use existing memory and traits to answer "who am I?"
+- **SituationPerception**: Can use observations and conversation history
+- **PersonBySituation**: Combines self-perception and situation to guide actions
+- **Integration**: These components provide context in `pre_act`, which is automatically included in action prompts
+- **Optional vs Required**: Instructions should be required; others can be optional via parameters
+
+**Benefits**:
+- **Better Self-Awareness**: Agents develop clearer sense of identity
+- **More Consistent Behavior**: Self-perception helps maintain character consistency
+- **Better Context Understanding**: Situation perception helps agents understand their environment
+- **Framework Alignment**: Follows standard Concordia patterns
+- **Improved Action Quality**: Person-by-situation reasoning can improve action selection
+
+**Reference**:
+- Instructions component: `concordia/components/agent/instructions.py`
+- SelfPerception component: `concordia/components/agent/question_of_recent_memories.py` (line 210)
+- Example usage: `examples/deprecated/modular/environment/supporting_agent_factory/basic_agent.py` (lines 115-155)
+- Example usage: `examples/selling_cookies.ipynb` (lines 233-255)
+- Current actor prefab: `concordia/prefabs/entity/impression_management_actor.py`
+
+---
+
 ## Framework Integration Opportunities
 
 **Overview**: Several opportunities exist to better utilize existing Concordia framework components. These would improve code reuse, maintainability, and alignment with framework patterns.

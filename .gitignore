@@ -21,6 +21,7 @@ __pycache__/
 /dist/
 /lab2d/
 /temp/
+**/temp/
 
 # Test cache
 .pytest_cache

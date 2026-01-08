@@ -153,14 +153,36 @@ class Entity(prefab_lib.Prefab):
         memory_component_key=memory_key,
     )
 
-    # IMPE Act component
-    act_component = impe_components.IMPEActComponent(
+    # IMPE Act component (base)
+    base_act_component = impe_components.IMPEActComponent(
         model=model,
         memory_component_key=impe_memory_key,
         cultural_norms_key=cultural_norms_key,
         personality_traits_key=personality_traits_key,
         context=context,
     )
+
+    # Optionally wrap with self-assessment component
+    enable_self_assessment = bool(
+        self.params.get('enable_self_assessment', False)
+    )
+    consistency_threshold = float(
+        self.params.get('consistency_threshold', 0.7)
+    )
+    enable_revision = not bool(self.params.get('disable_revision', False))  # Note: disable_revision is inverse
+
+    if enable_self_assessment:
+      act_component = impe_components.IMPESelfAssessmentComponent(
+          base_act_component=base_act_component,
+          model=model,
+          memory_component_key=impe_memory_key,
+          cultural_norms_key=cultural_norms_key,
+          personality_traits_key=personality_traits_key,
+          consistency_threshold=consistency_threshold,
+          enable_revision=enable_revision,
+      )
+    else:
+      act_component = base_act_component
 
     # Assemble components
     components_of_agent = {

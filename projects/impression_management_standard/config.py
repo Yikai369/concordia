@@ -23,7 +23,7 @@ def parse_arguments() -> ConversationConfig:
     parser.add_argument(
         '--model',
         type=str,
-        default='gpt-4o',
+        default='gpt-4o-mini',
         help='OpenAI model name.',
     )
     parser.add_argument(
@@ -134,7 +134,27 @@ def parse_arguments() -> ConversationConfig:
         action='store_true',
         help='Save Concordia component-level logs to JSON file (component state and behavior logs).',
     )
+    parser.add_argument(
+        '--enable_self_assessment',
+        action='store_true',
+        help='Enable self-assessment component (ensures responses align with traits, norms, and goals).',
+    )
+    parser.add_argument(
+        '--consistency_threshold',
+        type=float,
+        default=0.7,
+        help='Minimum consistency score (0-1) to accept response without revision (default: 0.7).',
+    )
+    parser.add_argument(
+        '--disable_revision',
+        action='store_true',
+        help='Disable revision of inconsistent responses (only log assessments).',
+    )
     args = parser.parse_args()
+
+    # Validate consistency_threshold
+    if not 0.0 <= args.consistency_threshold <= 1.0:
+        parser.error("--consistency_threshold must be between 0.0 and 1.0")
 
     # Validate: simplified log requires info flow logging
     if args.enable_simplified_log and not args.enable_info_flow_logging:
@@ -165,6 +185,9 @@ def parse_arguments() -> ConversationConfig:
         enable_simplified_log=args.enable_simplified_log,
         simplified_log_format=args.simplified_log_format,
         save_component_logs=args.save_component_logs,
+        enable_self_assessment=args.enable_self_assessment,
+        consistency_threshold=args.consistency_threshold,
+        disable_revision=args.disable_revision,
     )
 
 
