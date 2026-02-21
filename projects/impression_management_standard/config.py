@@ -150,6 +150,36 @@ def parse_arguments() -> ConversationConfig:
         action='store_true',
         help='Disable revision of inconsistent responses (only log assessments).',
     )
+    parser.add_argument(
+        '--no_instructions',
+        action='store_true',
+        help='Disable Instructions component (role-playing context).',
+    )
+    parser.add_argument(
+        '--no_self_perception',
+        action='store_true',
+        help='Disable SelfPerception component ("who am I?" questions).',
+    )
+    parser.add_argument(
+        '--enable_situation_perception',
+        action='store_true',
+        help='Enable SituationPerception component ("what situation am I in?" questions).',
+    )
+    parser.add_argument(
+        '--enable_person_by_situation',
+        action='store_true',
+        help='Enable PersonBySituation component ("what would I do?" reasoning). Requires --enable_situation_perception.',
+    )
+    parser.add_argument(
+        '--no_world_building',
+        action='store_true',
+        help='Disable 2A25 world-building context (Cadens, Riffers narrative).',
+    )
+    parser.add_argument(
+        '--no_interview_context',
+        action='store_true',
+        help='Disable interview-specific context in world-building.',
+    )
     args = parser.parse_args()
 
     # Validate consistency_threshold
@@ -188,6 +218,12 @@ def parse_arguments() -> ConversationConfig:
         enable_self_assessment=args.enable_self_assessment,
         consistency_threshold=args.consistency_threshold,
         disable_revision=args.disable_revision,
+        no_instructions=args.no_instructions,
+        no_self_perception=args.no_self_perception,
+        enable_situation_perception=args.enable_situation_perception,
+        enable_person_by_situation=args.enable_person_by_situation,
+        no_world_building=args.no_world_building,
+        no_interview_context=args.no_interview_context,
     )
 
 

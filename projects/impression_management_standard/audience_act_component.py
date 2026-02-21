@@ -30,12 +30,26 @@ class SimpleAudienceActComponent(
       context: entity_component.ComponentContextMapping,
       action_spec: entity_lib.ActionSpec,
   ) -> str:
-    """Return the most recent evaluation response."""
+    """Return the most recent evaluation response.
+
+    If self-assessment has revised the response, it will be in conversation history.
+    Otherwise, get it from the evaluation record.
+    """
     memory = self.get_entity().get_component(
         self._memory_component_key, type_=impe.IMPEMemoryComponent
     )
 
-    # Get most recent evaluation
+    # First, try to get from conversation history (in case self-assessment revised it)
+    conversation = memory.get_recent_conversation()
+    entity_name = self.get_entity().name
+
+    # Find the most recent utterance from this entity
+    for utt in reversed(conversation):
+      if utt.speaker == entity_name:
+        # Found the most recent utterance from this entity
+        return f'DIALOGUE: {utt.text}\nBODY: {utt.body}'
+
+    # Fallback: Get from evaluation record (if no conversation history yet)
     evaluations = memory.get_recent_evaluations()
     if not evaluations:
       # No evaluation yet, return empty (shouldn't happen in normal flow)

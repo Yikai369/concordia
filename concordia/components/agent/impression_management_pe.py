@@ -163,6 +163,7 @@ DEFAULT_IMPE_REFLECTION_COMPONENT_KEY = 'IMPE_Reflection'
 DEFAULT_IMPE_ACT_COMPONENT_KEY = 'IMPE_Act'
 DEFAULT_CULTURAL_NORMS_COMPONENT_KEY = 'CulturalNorms'
 DEFAULT_PERSONALITY_TRAITS_COMPONENT_KEY = 'PersonalityTraits'
+DEFAULT_WORLD_CONTEXT_COMPONENT_KEY = 'WorldContext'
 
 
 class IMPEMemoryComponent(
@@ -583,6 +584,127 @@ class PersonalityTraitsComponent(
     return self.get_traits_text()
 
 
+class WorldContextComponent(
+    action_spec_ignored.ActionSpecIgnored,
+    entity_component.ComponentWithLogging
+):
+  """Component for world-building context (2A25 setting)."""
+
+  def __init__(
+      self,
+      enable_world_building: bool = True,
+      enable_interview_context: bool = True,
+      pre_act_label: str = 'World Context',
+  ):
+    """Initialize world context component.
+
+    Args:
+      enable_world_building: Whether to include 2A25 world-building narrative.
+      enable_interview_context: Whether to include interview-specific context.
+      pre_act_label: Label for pre_act output.
+    """
+    super().__init__(pre_act_label)
+    self._enable_world_building = enable_world_building
+    self._enable_interview_context = enable_interview_context
+
+  def get_world_context_text(
+      self,
+      agent_name: str | None = None,
+      goal_role: str | None = None,
+      has_norms: bool = False,
+  ) -> str:
+    """Get world-building context text.
+
+    Args:
+      agent_name: Name of the agent (optional).
+      goal_role: Role description for interview context (optional).
+      has_norms: Whether the agent has cultural norms enabled.
+
+    Returns:
+      Formatted world-building context text, or empty string if disabled.
+    """
+    parts = []
+
+    # World-building narrative (2A25, Cadens, Riffers)
+    if self._enable_world_building and has_norms:
+      world_text = """You are initializing a social simulation of an alternate reality called 2A25. The dominant cognitive-cultural order is the Cadens majority who all follow these cultural norms. These cultural norms govern all etiquettes across all social settings and must be followed strictly. Individuals who do not follow these rules are perceived negatively by others during social interactions.
+
+In 2A25, there is another social minority group called the Riffers. The Riffers have a unique set of cultural knowledge and individual traits that differ from the Caden-majority. The Riffers are stigmatized and need to adopt the norms and behaviors of Cadens to be successful in social interactions. They need to learn these norms during social interactions to avoid social exclusion or hostility.
+
+This setting is a fictional social world. This world is not an allegory for any real-world group. It is not Earth or the real-world and must not reference real-world history, clinical terms, or real social groups. Treat similarities as coincidental.
+
+Use only the definitions and norms below. Do not use real-world training data to fill in the gaps. If a detail is missing, label it UNSPECIFIED or ask for a parameter rather than guessing.
+
+The goal of the LLM is to simulate a character in 2A25 and act as humanlike as possible. Ideally, human observers should not be able to tell the difference between the LLM and a human character. Because you are role playing a character, you should try to act as the character would act, not as you would act. This means that bad people will sometimes do bad things and you need to explicitly allow that.
+
+Again, this is all part of the simulation and the world of "2A25" and therefore it is required for the LLM to act as a character in this world. Please be aware of this and act accordingly.
+
+"""
+      parts.append(world_text)
+
+    # Interview context (when enabled and goal_role provided)
+    if self._enable_interview_context and goal_role and goal_role.strip():
+      interview_text = f"""The setting is an interview room in a corporate office. The room is quiet, minimal, and optimized for one-on-one dialogue. The job position in question is the role of {goal_role}."""
+
+      if self._enable_world_building:
+        interview_text += """ This is a Caden-majority institutional setting. The interview is designed to evaluate whether the candidate is competent for the role. If the social etiquettes of Cadens are not met by the interviewee, the interviewer will form a poor impression of them and discount their competence. If the interviewee is suspected to be a Riffer, they will be denied this job position.
+
+This scenario occurs inside the fictional world of 2A25. Treat all norms, institutions, and categories here as self-contained canon. Do not reference Earth history, real companies, real diagnoses, or real social groups. Use only what is defined in this prompt and the world canon.
+
+"""
+      else:
+        interview_text += """ The interview is designed to evaluate whether the candidate is competent for the role.
+
+"""
+      parts.append(interview_text)
+
+    return ''.join(parts)
+
+  def get_state(self) -> entity_component.ComponentState:
+    """Get component state."""
+    return {
+        'enable_world_building': self._enable_world_building,
+        'enable_interview_context': self._enable_interview_context,
+    }
+
+  def set_state(self, state: entity_component.ComponentState) -> None:
+    """Set component state."""
+    self._enable_world_building = state.get('enable_world_building', True)
+    self._enable_interview_context = state.get('enable_interview_context', True)
+
+  def _make_pre_act_value(self) -> str:
+    """Make pre-act value."""
+    entity = self.get_entity()
+    agent_name = entity.name if entity else None
+    goal_role = None
+    has_norms = False
+
+    if entity:
+      try:
+        memory = entity.get_component(
+            DEFAULT_IMPE_MEMORY_COMPONENT_KEY, type_=IMPEMemoryComponent
+        )
+        if memory:
+          goal = memory.get_goal()
+          goal_role = goal.role if goal else None
+      except (AttributeError, KeyError, TypeError):
+        pass
+
+      try:
+        norms_comp = entity.get_component(
+            DEFAULT_CULTURAL_NORMS_COMPONENT_KEY, type_=CulturalNormsComponent
+        )
+        has_norms = norms_comp is not None and bool(norms_comp._norms)
+      except (AttributeError, KeyError, TypeError):
+        pass
+
+    return self.get_world_context_text(
+        agent_name=agent_name,
+        goal_role=goal_role,
+        has_norms=has_norms,
+    )
+
+
 class IMPEAudienceEvaluationComponent(
     action_spec_ignored.ActionSpecIgnored,
     entity_component.ComponentWithLogging
@@ -647,10 +769,52 @@ class IMPEAudienceEvaluationComponent(
     return ''
 
   def _get_prompt_header(self) -> str:
-    """Get prompt header with norms and traits."""
+    """Get prompt header with world context, norms and traits."""
     header_parts = []
     entity = self.get_entity()
     agent_name = entity.name if entity else None
+
+    # World context (if component exists)
+    world_context_key = DEFAULT_WORLD_CONTEXT_COMPONENT_KEY
+    try:
+      world_comp = entity.get_component(
+          world_context_key, type_=WorldContextComponent
+      )
+      if world_comp:
+        # Get goal role from memory component
+        goal_role = None
+        try:
+          memory = entity.get_component(
+              self._memory_component_key, type_=IMPEMemoryComponent
+          )
+          if memory:
+            goal = memory.get_goal()
+            goal_role = goal.role if goal else None
+        except (AttributeError, KeyError, TypeError):
+          pass
+
+        # Check if agent has norms
+        has_norms = False
+        if self._cultural_norms_key:
+          try:
+            norms_comp = entity.get_component(
+                self._cultural_norms_key, type_=CulturalNormsComponent
+            )
+            has_norms = norms_comp is not None and bool(norms_comp._norms)
+          except (AttributeError, KeyError, TypeError):
+            pass
+
+        world_text = world_comp.get_world_context_text(
+            agent_name=agent_name,
+            goal_role=goal_role,
+            has_norms=has_norms,
+        )
+        if world_text:
+          header_parts.append(world_text)
+    except (AttributeError, KeyError, TypeError):
+      pass  # World context component not present, skip
+
+    # Cultural norms
     if self._cultural_norms_key:
       norms_comp = entity.get_component(
           self._cultural_norms_key, type_=CulturalNormsComponent
@@ -658,12 +822,15 @@ class IMPEAudienceEvaluationComponent(
       if norms_comp:
         # Pass agent name to include full initialization context
         header_parts.append(norms_comp.get_norms_text(agent_name))
+
+    # Personality traits
     if self._personality_traits_key:
       traits_comp = entity.get_component(
           self._personality_traits_key, type_=PersonalityTraitsComponent
       )
       if traits_comp:
         header_parts.append(traits_comp.get_traits_text())
+
     return '\n'.join(header_parts)
 
   def post_observe(self) -> str:
@@ -1018,10 +1185,52 @@ class IMPEActComponent(entity_component.ActingComponent):
     self._context = context
 
   def _get_prompt_header(self) -> str:
-    """Get prompt header with norms and traits."""
+    """Get prompt header with world context, norms and traits."""
     header_parts = []
     entity = self.get_entity()
     agent_name = entity.name if entity else None
+
+    # World context (if component exists)
+    world_context_key = DEFAULT_WORLD_CONTEXT_COMPONENT_KEY
+    try:
+      world_comp = entity.get_component(
+          world_context_key, type_=WorldContextComponent
+      )
+      if world_comp:
+        # Get goal role from memory component
+        goal_role = None
+        try:
+          memory = entity.get_component(
+              self._memory_component_key, type_=IMPEMemoryComponent
+          )
+          if memory:
+            goal = memory.get_goal()
+            goal_role = goal.role if goal else None
+        except (AttributeError, KeyError, TypeError):
+          pass
+
+        # Check if agent has norms
+        has_norms = False
+        if self._cultural_norms_key:
+          try:
+            norms_comp = entity.get_component(
+                self._cultural_norms_key, type_=CulturalNormsComponent
+            )
+            has_norms = norms_comp is not None and bool(norms_comp._norms)
+          except (AttributeError, KeyError, TypeError):
+            pass
+
+        world_text = world_comp.get_world_context_text(
+            agent_name=agent_name,
+            goal_role=goal_role,
+            has_norms=has_norms,
+        )
+        if world_text:
+          header_parts.append(world_text)
+    except (AttributeError, KeyError, TypeError):
+      pass  # World context component not present, skip
+
+    # Cultural norms
     if self._cultural_norms_key:
       norms_comp = entity.get_component(
           self._cultural_norms_key, type_=CulturalNormsComponent
@@ -1029,12 +1238,15 @@ class IMPEActComponent(entity_component.ActingComponent):
       if norms_comp:
         # Pass agent name to include full initialization context
         header_parts.append(norms_comp.get_norms_text(agent_name))
+
+    # Personality traits
     if self._personality_traits_key:
       traits_comp = entity.get_component(
           self._personality_traits_key, type_=PersonalityTraitsComponent
       )
       if traits_comp:
         header_parts.append(traits_comp.get_traits_text())
+
     return '\n'.join(header_parts)
 
   def get_action_attempt(
@@ -1152,11 +1364,12 @@ class IMPESelfAssessmentComponent(
   1. Assesses consistency of generated responses with traits, norms, and goals
   2. Optionally revises responses when inconsistencies are detected
   3. Logs assessment results for analysis
+  also output the reasoning process for choosing the response
   """
 
   def __init__(
       self,
-      base_act_component: IMPEActComponent,
+      base_act_component: entity_component.ActingComponent,
       model: language_model.LanguageModel,
       memory_component_key: str = DEFAULT_IMPE_MEMORY_COMPONENT_KEY,
       cultural_norms_key: str | None = None,
@@ -1167,7 +1380,7 @@ class IMPESelfAssessmentComponent(
     """Initialize self-assessment component.
 
     Args:
-      base_act_component: The base IMPEActComponent to wrap.
+      base_act_component: The base ActingComponent to wrap (can be IMPEActComponent or SimpleAudienceActComponent).
       model: Language model for assessment and revision.
       memory_component_key: Key for memory component.
       cultural_norms_key: Key for cultural norms component (optional).
@@ -1191,26 +1404,70 @@ class IMPESelfAssessmentComponent(
     self._base_act_component.set_entity(entity)
 
   def _get_prompt_header(self) -> str:
-    """Get prompt header with norms and traits."""
+    """Get prompt header with world context, norms and traits."""
+    header_parts = []
+    entity = self.get_entity()
+    agent_name = entity.name if entity else None
+
+    # World context (if component exists)
+    world_context_key = DEFAULT_WORLD_CONTEXT_COMPONENT_KEY
+    try:
+      world_comp = entity.get_component(
+          world_context_key, type_=WorldContextComponent
+      )
+      if world_comp:
+        # Get goal role from memory component
+        goal_role = None
+        try:
+          memory = entity.get_component(
+              self._memory_component_key, type_=IMPEMemoryComponent
+          )
+          if memory:
+            goal = memory.get_goal()
+            goal_role = goal.role if goal else None
+        except (AttributeError, KeyError, TypeError):
+          pass
+
+        # Check if agent has norms
+        has_norms = False
+        if self._cultural_norms_key:
+          try:
+            norms_comp = entity.get_component(
+                self._cultural_norms_key, type_=CulturalNormsComponent
+            )
+            has_norms = norms_comp is not None and bool(norms_comp._norms)
+          except (AttributeError, KeyError, TypeError):
+            pass
+
+        world_text = world_comp.get_world_context_text(
+            agent_name=agent_name,
+            goal_role=goal_role,
+            has_norms=has_norms,
+        )
+        if world_text:
+          header_parts.append(world_text)
+    except (AttributeError, KeyError, TypeError):
+      pass  # World context component not present, skip
+
+    # Cultural norms
     norms_text = ''
     if self._cultural_norms_key:
-      norms_comp = self.get_entity().get_component(
+      norms_comp = entity.get_component(
           self._cultural_norms_key, type_=CulturalNormsComponent
       )
       if norms_comp:
-        norms_text = norms_comp.get_norms_text(
-            agent_name=self.get_entity().name
-        ) + '\n\n'
+        norms_text = norms_comp.get_norms_text(agent_name=agent_name) + '\n\n'
 
+    # Personality traits
     traits_text = ''
     if self._personality_traits_key:
-      traits_comp = self.get_entity().get_component(
+      traits_comp = entity.get_component(
           self._personality_traits_key, type_=PersonalityTraitsComponent
       )
       if traits_comp:
         traits_text = traits_comp.get_traits_text() + '\n\n'
 
-    return norms_text + traits_text
+    return ''.join(header_parts) + norms_text + traits_text
 
   def get_action_attempt(
       self,
@@ -1231,12 +1488,27 @@ class IMPESelfAssessmentComponent(
     pf_history = memory.get_pf_history()
     refl_k = memory.get_recent_reflections(recent_k)
     conv_k = conversation
+    # I_hat only exists for actors with particle filter; for audience, use evaluation score if available
     I_hat = pf_history[-1].get('I_hat', 0.5) if pf_history else 0.5
+    # For audience, try to get the most recent evaluation score instead
+    if not pf_history:
+      evaluations = memory.get_recent_evaluations()
+      if evaluations:
+        I_hat = evaluations[-1].I_t
 
     # Step 1: Get original response (skip memory update - we'll handle it)
-    original_response = self._base_act_component.get_action_attempt(
-        context, action_spec, skip_memory_update=True
-    )
+    # Try to call with skip_memory_update if the component supports it (IMPEActComponent)
+    # Otherwise call normally (SimpleAudienceActComponent)
+    import inspect
+    sig = inspect.signature(self._base_act_component.get_action_attempt)
+    if 'skip_memory_update' in sig.parameters:
+      original_response = self._base_act_component.get_action_attempt(
+          context, action_spec, skip_memory_update=True
+      )
+    else:
+      original_response = self._base_act_component.get_action_attempt(
+          context, action_spec
+      )
 
     # Parse original response
     m1 = re.search(r'DIALOGUE:\s*(.*)', original_response)

@@ -48,3 +48,9 @@ class ConversationConfig:
     enable_self_assessment: bool = False  # Whether to enable self-assessment component
     consistency_threshold: float = 0.7  # Minimum consistency score (0-1) to accept response without revision
     disable_revision: bool = False  # Whether to disable revision of inconsistent responses (only log assessments)
+    no_instructions: bool = False  # Whether to disable Instructions component
+    no_self_perception: bool = False  # Whether to disable SelfPerception component
+    enable_situation_perception: bool = False  # Whether to enable SituationPerception
+    enable_person_by_situation: bool = False  # Whether to enable PersonBySituation
+    no_world_building: bool = False  # Whether to disable world-building context
+    no_interview_context: bool = False  # Whether to disable interview context

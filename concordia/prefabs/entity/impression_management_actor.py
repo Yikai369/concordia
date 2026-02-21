@@ -21,6 +21,8 @@ from concordia.agents import entity_agent_with_logging
 from concordia.associative_memory import basic_associative_memory
 from concordia.components import agent as agent_components
 from concordia.components.agent import impression_management_pe as impe_components
+from concordia.components.agent import instructions
+from concordia.components.agent import question_of_recent_memories
 from concordia.language_model import language_model
 from concordia.typing import prefab as prefab_lib
 
@@ -51,6 +53,12 @@ class Entity(prefab_lib.Prefab):
           'cultural_norms': None,
           'traits': None,
           'trait_scores': None,
+          'enable_instructions': True,
+          'enable_self_perception': True,
+          'enable_situation_perception': False,
+          'enable_person_by_situation': False,
+          'enable_world_building': True,
+          'enable_interview_context': True,
       }
   )
 
@@ -93,6 +101,74 @@ class Entity(prefab_lib.Prefab):
         ideal=goal_ideal,
     )
 
+    # Instructions component (role-playing context, optional)
+    enable_instructions = bool(
+        self.params.get('enable_instructions', True)  # Default: enabled
+    )
+
+    instructions_key = None
+    instructions_comp = None
+    if enable_instructions:
+      instructions_key = 'Instructions'
+      instructions_comp = instructions.Instructions(
+          agent_name=entity_name,
+          pre_act_label='\nRole playing instructions',
+      )
+
+    # SelfPerception component (optional, but recommended)
+    enable_self_perception = bool(
+        self.params.get('enable_self_perception', True)  # Default: enabled
+    )
+
+    self_perception_key = None
+    self_perception_comp = None
+    if enable_self_perception:
+      self_perception_key = 'SelfPerception'
+      self_perception_comp = question_of_recent_memories.SelfPerception(
+          model=model,
+          pre_act_label=f'\nQuestion: What kind of person is {entity_name}?\nAnswer',
+      )
+
+    # SituationPerception component (optional)
+    enable_situation_perception = bool(
+        self.params.get('enable_situation_perception', False)  # Default: disabled
+    )
+
+    situation_perception_key = None
+    situation_perception_comp = None
+    if enable_situation_perception:
+      situation_perception_key = 'SituationPerception'
+      situation_perception_comp = question_of_recent_memories.SituationPerception(
+          model=model,
+          pre_act_label=f'\nQuestion: What kind of situation is {entity_name} in right now?\nAnswer',
+      )
+
+    # PersonBySituation component (optional, requires SelfPerception and SituationPerception)
+    enable_person_by_situation = bool(
+        self.params.get('enable_person_by_situation', False)  # Default: disabled
+    )
+
+    person_by_situation_key = None
+    person_by_situation_comp = None
+    if enable_person_by_situation and self_perception_key and situation_perception_key:
+      person_by_situation_key = 'PersonBySituation'
+      person_by_situation_comp = question_of_recent_memories.PersonBySituation(
+          model=model,
+          components=[
+              self_perception_key,
+              situation_perception_key,
+          ],
+          pre_act_label=f'\nQuestion: What would a person like {entity_name} do in a situation like this?\nAnswer',
+      )
+    elif enable_person_by_situation:
+      # Warn if dependencies not met
+      import warnings
+      warnings.warn(
+          f"PersonBySituation requires both SelfPerception and SituationPerception. "
+          f"Disabling PersonBySituation for {entity_name}.",
+          UserWarning
+      )
+
     # IMPE Memory component
     impe_memory_key = impe_components.DEFAULT_IMPE_MEMORY_COMPONENT_KEY
     impe_memory = impe_components.IMPEMemoryComponent(
@@ -118,6 +194,23 @@ class Entity(prefab_lib.Prefab):
           traits=traits,
           trait_scores=trait_scores or {},
           pre_act_label='\nPersonality Traits',
+      )
+
+    # World Context component (optional)
+    world_context_key = None
+    enable_world_building = bool(
+        self.params.get('enable_world_building', True)
+    )
+    enable_interview_context = bool(
+        self.params.get('enable_interview_context', True)
+    )
+
+    if enable_world_building or enable_interview_context:
+      world_context_key = impe_components.DEFAULT_WORLD_CONTEXT_COMPONENT_KEY
+      world_context_comp = impe_components.WorldContextComponent(
+          enable_world_building=enable_world_building,
+          enable_interview_context=enable_interview_context,
+          pre_act_label='\nWorld Context',
       )
 
     # Actor Particle Filter component
@@ -184,17 +277,45 @@ class Entity(prefab_lib.Prefab):
     else:
       act_component = base_act_component
 
-    # Assemble components
-    components_of_agent = {
-        memory_key: memory,
-        impe_memory_key: impe_memory,
-        actor_pf_key: actor_pf,
-        reflection_key: reflection,
-        observation_to_memory_key: observation_to_memory,
-    }
+    # Assemble components in order (dependencies first)
+    components_of_agent = {}
 
+    # 1. Instructions (first - provides experimental context)
+    if instructions_key:
+      components_of_agent[instructions_key] = instructions_comp
+
+    # 2. Self-perception (can use traits, norms, memories)
+    if self_perception_key:
+      components_of_agent[self_perception_key] = self_perception_comp
+
+    # 3. Situation perception (uses observations and memories)
+    if situation_perception_key:
+      components_of_agent[situation_perception_key] = situation_perception_comp
+
+    # 4. Person-by-situation (depends on self and situation perception)
+    if person_by_situation_key:
+      components_of_agent[person_by_situation_key] = person_by_situation_comp
+
+    # 5. Memory components (required for perception components)
+    components_of_agent[memory_key] = memory
+    components_of_agent[impe_memory_key] = impe_memory
+
+    # 6. Observation components (existing)
+    components_of_agent[observation_to_memory_key] = observation_to_memory
+
+    # 7. Other IMPE components (existing)
+    components_of_agent[actor_pf_key] = actor_pf
+    components_of_agent[reflection_key] = reflection
+
+    # 8. World context (optional)
+    if world_context_key:
+      components_of_agent[world_context_key] = world_context_comp
+
+    # 9. Cultural norms (existing, conditional)
     if cultural_norms_key:
       components_of_agent[cultural_norms_key] = cultural_norms_comp
+
+    # 10. Personality traits (existing, conditional)
     if personality_traits_key:
       components_of_agent[personality_traits_key] = personality_traits_comp
 
