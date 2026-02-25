@@ -188,11 +188,14 @@ class Entity(prefab_lib.Prefab):
 
     # Personality Traits component (optional)
     personality_traits_key = None
+    use_trait_paragraph = bool(self.params.get('use_trait_paragraph', False))
     if traits:
       personality_traits_key = impe_components.DEFAULT_PERSONALITY_TRAITS_COMPONENT_KEY
       personality_traits_comp = impe_components.PersonalityTraitsComponent(
           traits=traits,
           trait_scores=trait_scores or {},
+          use_trait_paragraph=use_trait_paragraph,
+          model=model if use_trait_paragraph else None,
           pre_act_label='\nPersonality Traits',
       )
 
@@ -205,11 +208,13 @@ class Entity(prefab_lib.Prefab):
         self.params.get('enable_interview_context', True)
     )
 
+    use_full_2a25 = bool(self.params.get('use_full_2a25_world', True))
     if enable_world_building or enable_interview_context:
       world_context_key = impe_components.DEFAULT_WORLD_CONTEXT_COMPONENT_KEY
       world_context_comp = impe_components.WorldContextComponent(
           enable_world_building=enable_world_building,
           enable_interview_context=enable_interview_context,
+          use_full_2a25=use_full_2a25,
           pre_act_label='\nWorld Context',
       )
 
@@ -247,12 +252,16 @@ class Entity(prefab_lib.Prefab):
     )
 
     # IMPE Act component (base)
+    use_option_space = bool(self.params.get('use_option_space', False))
+    use_memory_check = bool(self.params.get('use_memory_check', False))
     base_act_component = impe_components.IMPEActComponent(
         model=model,
         memory_component_key=impe_memory_key,
         cultural_norms_key=cultural_norms_key,
         personality_traits_key=personality_traits_key,
         context=context,
+        use_option_space=use_option_space,
+        use_memory_check=use_memory_check,
     )
 
     # Optionally wrap with self-assessment component

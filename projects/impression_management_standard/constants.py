@@ -129,7 +129,7 @@ ALL_TRAITS: list[PersonalityTrait] = [
     ),
 ]
 
-# Default interview role
+# Default interview role (used when no preset or unknown preset)
 DEFAULT_INTERVIEW_ROLE = """Role: Product Manager
 
 Responsibilities:
@@ -144,6 +144,55 @@ Evaluation Criteria:
 - Communication skills and stakeholder management
 - Data-driven decision making
 """
+
+# Interview role presets: key -> full role text (responsibilities + evaluation criteria)
+INTERVIEW_ROLE_PRESETS: dict[str, str] = {
+    'product_manager': DEFAULT_INTERVIEW_ROLE,
+    'customer_service': """Role: Customer Service Agent
+
+Responsibilities:
+- Handle customer inquiries and resolve issues
+- Maintain a positive, professional demeanor
+- Use knowledge bases and tools to find solutions
+- Escalate complex cases when appropriate
+
+Evaluation Criteria:
+- Communication clarity and empathy
+- Problem-solving and de-escalation skills
+- Adherence to procedures and quality standards
+- Reliability and attendance
+""",
+}
+
+# Optional question banks for the interviewer (audience) per preset key
+INTERVIEW_QUESTION_BANKS: dict[str, list[str]] = {
+    'product_manager': [
+        "Tell me about a product you led from idea to launch.",
+        "How do you prioritize features when resources are limited?",
+        "Describe how you use user data to inform product decisions.",
+        "How do you work with engineering and stakeholders?",
+    ],
+    'customer_service': [
+        "Tell me about your customer service experience.",
+        "How do you handle an upset or angry customer?",
+        "Describe a time you had to escalate an issue.",
+        "How do you balance speed and quality in support?",
+    ],
+}
+
+# Optional experience banks for the interviewee (actor) per preset key
+INTERVIEW_EXPERIENCE_BANKS: dict[str, list[str]] = {
+    'product_manager': [
+        "Led roadmap planning and aligned stakeholders on priorities.",
+        "Used analytics and A/B tests to decide feature rollouts.",
+        "Collaborated with engineering on sprint planning and trade-offs.",
+    ],
+    'customer_service': [
+        "Handled high-volume inbound calls and chat support.",
+        "De-escalated difficult customers and restored satisfaction.",
+        "Followed scripts and knowledge bases while adapting to edge cases.",
+    ],
+}
 
 # Default agent names
 DEFAULT_ACTOR_NAME = "John"

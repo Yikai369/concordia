@@ -67,7 +67,7 @@ def plot_learning_dynamics(turn_logs: list[TurnLog], save_dir: str) -> None:
         pe_plot_path = os.path.join(save_dir, "pe.png")
         plt.savefig(pe_plot_path, dpi=200, bbox_inches="tight")
         plt.close()
-        print(f"✓ Saved plot to {pe_plot_path}")
+        print(f"[OK] Saved plot to {pe_plot_path}")
 
     # --- Plot 2: I_t and I_hat ---
     plt.figure()
@@ -82,7 +82,7 @@ def plot_learning_dynamics(turn_logs: list[TurnLog], save_dir: str) -> None:
     delta_I_plot_path = os.path.join(save_dir, "delta_I.png")
     plt.savefig(delta_I_plot_path, dpi=200, bbox_inches="tight")
     plt.close()
-    print(f"✓ Saved plot to {delta_I_plot_path}")
+    print(f"[OK] Saved plot to {delta_I_plot_path}")
 
     # --- Plot 3: Learning gain ---
     plt.figure()
@@ -95,7 +95,7 @@ def plot_learning_dynamics(turn_logs: list[TurnLog], save_dir: str) -> None:
     learning_gain_plot_path = os.path.join(save_dir, "learning_gain.png")
     plt.savefig(learning_gain_plot_path, dpi=200, bbox_inches="tight")
     plt.close()
-    print(f"✓ Saved plot to {learning_gain_plot_path}")
+    print(f"[OK] Saved plot to {learning_gain_plot_path}")
 
 
 def print_pretty_trace(turn_logs: list[TurnLog]):
@@ -127,7 +127,7 @@ def save_config(config: ConversationConfig, save_dir: str) -> None:
 
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(config_dict, f, ensure_ascii=False, indent=2)
-    print(f"✓ Saved config to {config_path}")
+    print(f"[OK] Saved config to {config_path}")
 
 
 def save_component_logs(sim, save_dir: str) -> str | None:
@@ -178,15 +178,23 @@ def save_component_logs(sim, save_dir: str) -> str | None:
     with open(log_file, 'w', encoding='utf-8') as f:
         json.dump(component_logs, f, indent=2, ensure_ascii=False)
 
-    print(f"✓ Saved component logs to {log_file}")
+    print(f"[OK] Saved component logs to {log_file}")
     return log_file
 
 
 def save_results(
     config: ConversationConfig,
     turn_logs: list[TurnLog],
+    actor_traits: str | None = None,
+    audience_traits: str | None = None,
+    question_checks: dict | None = None,
 ):
-    """Save results to JSON, generate plots, and print summary."""
+    """Save results to JSON, generate plots, and print summary.
+
+    When actor_traits, audience_traits, or question_checks is provided, the JSON
+    file is written as an object with those keys and turns. Otherwise the file
+    is a JSON array of turn log objects (backward compatible).
+    """
     from dataclasses import asdict
 
     # Save configuration
@@ -194,9 +202,25 @@ def save_results(
 
     # Save JSON
     json_path = os.path.join(config.save_dir, config.outfile)
-    with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump([asdict(log) for log in turn_logs], f, ensure_ascii=False, indent=2)
-    print(f"✓ Saved log to {json_path}")
+    use_object_format = (
+        actor_traits is not None
+        or audience_traits is not None
+        or question_checks is not None
+    )
+    if use_object_format:
+        payload = {'turns': [asdict(log) for log in turn_logs]}
+        if actor_traits is not None:
+            payload['actor_traits'] = actor_traits
+        if audience_traits is not None:
+            payload['audience_traits'] = audience_traits
+        if question_checks is not None:
+            payload['question_checks'] = question_checks
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+    else:
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump([asdict(log) for log in turn_logs], f, ensure_ascii=False, indent=2)
+    print(f"[OK] Saved log to {json_path}")
 
     # Generate plots if not disabled
     if not config.no_plots:

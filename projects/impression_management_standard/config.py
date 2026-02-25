@@ -61,6 +61,12 @@ def parse_arguments() -> ConversationConfig:
         help='Disable personality traits.',
     )
     parser.add_argument(
+        '--traits_file',
+        type=str,
+        default=None,
+        help='Load personality traits from Excel (.xlsx) or CSV file with columns "name" and "assertion". Ignored if --no_traits.',
+    )
+    parser.add_argument(
         '--no_context',
         action='store_true',
         help='Disable interview context.',
@@ -180,6 +186,52 @@ def parse_arguments() -> ConversationConfig:
         action='store_true',
         help='Disable interview-specific context in world-building.',
     )
+    parser.add_argument(
+        '--use_trait_paragraph',
+        action='store_true',
+        help='Use one LLM-generated paragraph per agent for personality (instead of score-based traits). Adds 1 LLM call per agent.',
+    )
+    parser.add_argument(
+        '--interview_role_preset',
+        type=str,
+        default='product_manager',
+        help='Interview role preset: product_manager, customer_service. Sets role text and optional question/experience banks.',
+    )
+    parser.add_argument(
+        '--no_question_bank',
+        action='store_true',
+        help='Do not append question bank to interviewer (audience) context.',
+    )
+    parser.add_argument(
+        '--no_experience_bank',
+        action='store_true',
+        help='Do not append experience bank to interviewee (actor) context.',
+    )
+    parser.add_argument(
+        '--actor_has_norms',
+        action='store_true',
+        help='Give the interviewee (actor) the same cultural norms as the interviewer (audience).',
+    )
+    parser.add_argument(
+        '--use_option_space',
+        action='store_true',
+        help='[Experimental] Generate 4 response options per turn then choose one (2 LLM calls per turn for actor and audience).',
+    )
+    parser.add_argument(
+        '--enable_question_checks',
+        action='store_true',
+        help='After the run, ask the model to summarize situation and personality per agent (2 LLM calls per agent, for analysis/debugging).',
+    )
+    parser.add_argument(
+        '--no_full_2a25',
+        action='store_true',
+        help='Use minimal generic world-building text instead of full 2A25/Cadens/Riffers narrative.',
+    )
+    parser.add_argument(
+        '--use_memory_check',
+        action='store_true',
+        help='Inject LLM-generated full-conversation summary into audience and actor prompts (1 extra LLM call per turn).',
+    )
     args = parser.parse_args()
 
     # Validate consistency_threshold
@@ -224,6 +276,16 @@ def parse_arguments() -> ConversationConfig:
         enable_person_by_situation=args.enable_person_by_situation,
         no_world_building=args.no_world_building,
         no_interview_context=args.no_interview_context,
+        traits_file=args.traits_file,
+        use_trait_paragraph=args.use_trait_paragraph,
+        interview_role_preset=args.interview_role_preset,
+        no_question_bank=args.no_question_bank,
+        no_experience_bank=args.no_experience_bank,
+        actor_has_norms=args.actor_has_norms,
+        use_option_space=args.use_option_space,
+        enable_question_checks=args.enable_question_checks,
+        use_full_2a25_world=not args.no_full_2a25,
+        use_memory_check=args.use_memory_check,
     )
 
 

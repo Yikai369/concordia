@@ -13,7 +13,8 @@ def extract_turn_data_from_entities(
     actor_name: str,
     audience_name: str,
     total_turns: int,
-) -> list[TurnLog]:
+    use_trait_paragraph: bool = False,
+) -> tuple[list[TurnLog], str | None, str | None]:
     """Extract turn data from simulation entities.
 
     Args:
@@ -21,11 +22,15 @@ def extract_turn_data_from_entities(
         actor_name: Name of actor entity.
         audience_name: Name of audience entity.
         total_turns: Total number of turns.
+        use_trait_paragraph: If True, also extract actor/audience trait paragraphs from
+            PersonalityTraitsComponent when present.
 
     Returns:
-        List of TurnLog entries.
+        Tuple of (list of TurnLog entries, actor_traits paragraph or None, audience_traits paragraph or None).
     """
     turn_logs = []
+    actor_traits: str | None = None
+    audience_traits: str | None = None
 
     # Get entities from simulation
     entities = sim.get_entities()
@@ -33,7 +38,7 @@ def extract_turn_data_from_entities(
     audience_entity = next((e for e in entities if e.name == audience_name), None)
 
     if not actor_entity or not audience_entity:
-        return turn_logs
+        return turn_logs, actor_traits, audience_traits
 
     # Get components
     actor_memory = actor_entity.get_component(
@@ -139,4 +144,25 @@ def extract_turn_data_from_entities(
             ess=ess,
         ))
 
-    return turn_logs
+    # Optionally extract trait paragraphs for JSON output
+    if use_trait_paragraph:
+        try:
+            actor_traits_comp = actor_entity.get_component(
+                impe.DEFAULT_PERSONALITY_TRAITS_COMPONENT_KEY,
+                type_=impe.PersonalityTraitsComponent,
+            )
+            if actor_traits_comp is not None:
+                actor_traits = actor_traits_comp.get_trait_paragraph()
+        except (KeyError, TypeError, AttributeError):
+            pass
+        try:
+            audience_traits_comp = audience_entity.get_component(
+                impe.DEFAULT_PERSONALITY_TRAITS_COMPONENT_KEY,
+                type_=impe.PersonalityTraitsComponent,
+            )
+            if audience_traits_comp is not None:
+                audience_traits = audience_traits_comp.get_trait_paragraph()
+        except (KeyError, TypeError, AttributeError):
+            pass
+
+    return turn_logs, actor_traits, audience_traits

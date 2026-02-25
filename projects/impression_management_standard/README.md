@@ -93,6 +93,15 @@ python projects/impression_management_standard/main.py --turns 2 --seed 42
 | `--local_model` | str | `llama3.1:8b` | Local model name (for Ollama) |
 | `--no_audience_norms` | flag | False | Disable cultural norms for audience |
 | `--no_traits` | flag | False | Disable personality traits |
+| `--traits_file` | str | None | Load traits from Excel (.xlsx) or CSV with columns `name` and `assertion`. Ignored if `--no_traits`. For Excel, install: `pip install openpyxl` |
+| `--use_trait_paragraph` | flag | False | Use one LLM-generated paragraph per agent for personality (adds 1 LLM call per agent). Output JSON includes `actor_traits` and `audience_traits`. |
+| `--interview_role_preset` | str | `product_manager` | Interview role: `product_manager`, `customer_service`. Sets role text and optional question/experience banks. |
+| `--no_question_bank` | flag | False | Do not append question bank to interviewer context. |
+| `--no_experience_bank` | flag | False | Do not append experience bank to interviewee context. |
+| `--actor_has_norms` | flag | False | Give the interviewee (actor) the same cultural norms as the interviewer. |
+| `--use_option_space` | flag | False | [Experimental] Generate 4 response options per turn then choose one (2 LLM calls per turn for actor and audience). |
+| `--enable_question_checks` | flag | False | After the run, ask the model to summarize situation and personality per agent (2 LLM calls per agent, for analysis/debugging). Saved under `question_checks` in JSON. |
+| `--no_full_2a25` | flag | False | Use minimal generic world-building text instead of full 2A25/Cadens/Riffers narrative. |
 | `--no_context` | flag | False | Disable interview context |
 
 ## Output Location

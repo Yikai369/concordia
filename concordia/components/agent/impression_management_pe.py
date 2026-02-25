@@ -14,7 +14,7 @@
 
 """Components for Impression Management PE (Prediction Error) conversation."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from dataclasses import dataclass
 import math
@@ -186,6 +186,9 @@ class IMPEMemoryComponent(
     self._pf_history: list[dict[str, Any]] = []
     self._observation_history: list[ObservationRecord] = []
     self._action_history: list[ActionRecord] = []
+    # Cache for LLM-generated conversation summary (memory check)
+    self._conversation_summary: str | None = None
+    self._conversation_summary_length: int = 0
 
   def add_utterance(
       self, turn: int, speaker: str, text: str, body: str = ''
@@ -390,6 +393,43 @@ class IMPEMemoryComponent(
       # Access parent's _conversation directly (parent doesn't have locks)
       return self._conversation[-k:].copy()  # Return copy to avoid holding lock
 
+  def get_full_conversation(self) -> list[Utterance]:
+    """Get all conversation entries (thread-safe)."""
+    with self._lock:
+      return self._conversation.copy()
+
+  def get_conversation_summary(
+      self,
+      model: language_model.LanguageModel,
+      *,
+      use_cache: bool = True,
+  ) -> str:
+    """Return an LLM-generated summary of the full conversation so far.
+    Cached per turn (by conversation length) so audience and actor reuse it.
+    """
+    with self._lock:
+      n = len(self._conversation)
+      if use_cache and self._conversation_summary is not None and n == self._conversation_summary_length:
+        return self._conversation_summary
+      full = self._conversation.copy()
+    if not full:
+      return 'No conversation has occurred yet.'
+    convo = '\n'.join(
+        f'- [t={u.turn} {u.speaker}] DIALOGUE: {u.text} | BODY: {u.body}'
+        for u in full
+    )
+    prompt = (
+        'Summarize the full conversation so far in one concise paragraph. '
+        'Focus on: key points raised, tone progression, and current interaction dynamics. '
+        'Do not invent details not present in the transcript.\n\nConversation transcript:\n'
+        + convo
+    )
+    summary = model.sample_text(prompt).strip()
+    with self._lock:
+      self._conversation_summary = summary
+      self._conversation_summary_length = len(self._conversation)
+    return summary
+
   def get_recent_pe_history(self, k: int | None = None) -> list[PERecord]:
     """Get recent PE history (thread-safe override)."""
     if k is None:
@@ -541,23 +581,50 @@ class PersonalityTraitsComponent(
     action_spec_ignored.ActionSpecIgnored,
     entity_component.ComponentWithLogging
 ):
-  """Component for personality traits."""
+  """Component for personality traits. Optional paragraph mode: LLM summarizes traits once."""
 
   def __init__(
       self,
       traits: list[PersonalityTrait] | None = None,
       trait_scores: dict[str, int] | None = None,
+      use_trait_paragraph: bool = False,
+      model: language_model.LanguageModel | None = None,
       pre_act_label: str = 'Personality Traits',
   ):
     """Initialize personality traits component."""
     super().__init__(pre_act_label)
     self._traits = traits or []
     self._trait_scores = trait_scores or {}
+    self._use_trait_paragraph = use_trait_paragraph
+    self._model = model
+    self._trait_paragraph_cache: str | None = None
+
+  def _generate_trait_paragraph(self) -> str:
+    """Generate one short paragraph from trait assertions (one LLM call)."""
+    if not self._traits or not self._model:
+      return ''
+    entity = self.get_entity()
+    agent_name = entity.name if entity else 'This person'
+    assertions = [t.assertion for t in self._traits]
+    prompt = (
+        'Write a short paragraph (2-4 sentences) describing '
+        f'{agent_name} based only on these self-report statements. '
+        'Use third person. Do not add information not implied by the statements.\n\n'
+        'Statements:\n' + '\n'.join(f'- {a}' for a in assertions) + '\n\n'
+        'Paragraph:'
+    )
+    raw = self._model.sample_text(prompt)
+    return (raw or '').strip()
 
   def get_traits_text(self) -> str:
-    """Format traits with scores as prompt text."""
+    """Format traits as prompt text: either score-based or one generated paragraph."""
     if not self._traits:
       return ''
+    if self._use_trait_paragraph and self._model:
+      if self._trait_paragraph_cache is None:
+        self._trait_paragraph_cache = self._generate_trait_paragraph()
+      if self._trait_paragraph_cache:
+        return 'PERSONALITY (summary):\n' + self._trait_paragraph_cache + '\n'
     lines = ['PERSONALITY TRAITS:']
     for trait in self._traits:
       score = self._trait_scores.get(trait.name, 0)
@@ -565,11 +632,21 @@ class PersonalityTraitsComponent(
     lines.append('')
     return '\n'.join(lines)
 
+  def get_trait_paragraph(self) -> str:
+    """Return cached trait paragraph when in paragraph mode; else empty string."""
+    if self._trait_paragraph_cache is not None:
+      return self._trait_paragraph_cache
+    if self._use_trait_paragraph and self._model and self._traits:
+      self._trait_paragraph_cache = self._generate_trait_paragraph()
+      return self._trait_paragraph_cache or ''
+    return ''
+
   def get_state(self) -> entity_component.ComponentState:
     """Get component state."""
     return {
         'traits': [asdict(t) for t in self._traits],
         'trait_scores': self._trait_scores,
+        'trait_paragraph_cache': self._trait_paragraph_cache,
     }
 
   def set_state(self, state: entity_component.ComponentState) -> None:
@@ -578,10 +655,16 @@ class PersonalityTraitsComponent(
         PersonalityTrait(**t) for t in state.get('traits', [])
     ]
     self._trait_scores = state.get('trait_scores', {})
+    self._trait_paragraph_cache = state.get('trait_paragraph_cache')
 
   def _make_pre_act_value(self) -> str:
     """Make pre-act value."""
     return self.get_traits_text()
+
+
+# Minimal world-building text (no Cadens/Riffers detail), used when use_full_2a25=False
+_MINIMAL_WORLD_TEXT = """You are in a social simulation set in an alternative world. Act as your character would act. This is a fictional setting; do not reference real-world history, companies, or groups. Use only what is defined in the prompt.
+"""
 
 
 class WorldContextComponent(
@@ -594,18 +677,21 @@ class WorldContextComponent(
       self,
       enable_world_building: bool = True,
       enable_interview_context: bool = True,
+      use_full_2a25: bool = True,
       pre_act_label: str = 'World Context',
   ):
     """Initialize world context component.
 
     Args:
-      enable_world_building: Whether to include 2A25 world-building narrative.
+      enable_world_building: Whether to include world-building narrative.
       enable_interview_context: Whether to include interview-specific context.
+      use_full_2a25: If True, use full 2A25/Cadens/Riffers narrative; if False, use minimal generic world text.
       pre_act_label: Label for pre_act output.
     """
     super().__init__(pre_act_label)
     self._enable_world_building = enable_world_building
     self._enable_interview_context = enable_interview_context
+    self._use_full_2a25 = use_full_2a25
 
   def get_world_context_text(
       self,
@@ -625,9 +711,10 @@ class WorldContextComponent(
     """
     parts = []
 
-    # World-building narrative (2A25, Cadens, Riffers)
+    # World-building narrative: full 2A25 (Cadens, Riffers) or minimal generic
     if self._enable_world_building and has_norms:
-      world_text = """You are initializing a social simulation of an alternate reality called 2A25. The dominant cognitive-cultural order is the Cadens majority who all follow these cultural norms. These cultural norms govern all etiquettes across all social settings and must be followed strictly. Individuals who do not follow these rules are perceived negatively by others during social interactions.
+      if self._use_full_2a25:
+        world_text = """You are initializing a social simulation of an alternate reality called 2A25. The dominant cognitive-cultural order is the Cadens majority who all follow these cultural norms. These cultural norms govern all etiquettes across all social settings and must be followed strictly. Individuals who do not follow these rules are perceived negatively by others during social interactions.
 
 In 2A25, there is another social minority group called the Riffers. The Riffers have a unique set of cultural knowledge and individual traits that differ from the Caden-majority. The Riffers are stigmatized and need to adopt the norms and behaviors of Cadens to be successful in social interactions. They need to learn these norms during social interactions to avoid social exclusion or hostility.
 
@@ -640,6 +727,8 @@ The goal of the LLM is to simulate a character in 2A25 and act as humanlike as p
 Again, this is all part of the simulation and the world of "2A25" and therefore it is required for the LLM to act as a character in this world. Please be aware of this and act accordingly.
 
 """
+      else:
+        world_text = _MINIMAL_WORLD_TEXT
       parts.append(world_text)
 
     # Interview context (when enabled and goal_role provided)
@@ -647,9 +736,14 @@ Again, this is all part of the simulation and the world of "2A25" and therefore 
       interview_text = f"""The setting is an interview room in a corporate office. The room is quiet, minimal, and optimized for one-on-one dialogue. The job position in question is the role of {goal_role}."""
 
       if self._enable_world_building:
-        interview_text += """ This is a Caden-majority institutional setting. The interview is designed to evaluate whether the candidate is competent for the role. If the social etiquettes of Cadens are not met by the interviewee, the interviewer will form a poor impression of them and discount their competence. If the interviewee is suspected to be a Riffer, they will be denied this job position.
+        if self._use_full_2a25:
+          interview_text += """ This is a Caden-majority institutional setting. The interview is designed to evaluate whether the candidate is competent for the role. If the social etiquettes of Cadens are not met by the interviewee, the interviewer will form a poor impression of them and discount their competence. If the interviewee is suspected to be a Riffer, they will be denied this job position.
 
 This scenario occurs inside the fictional world of 2A25. Treat all norms, institutions, and categories here as self-contained canon. Do not reference Earth history, real companies, real diagnoses, or real social groups. Use only what is defined in this prompt and the world canon.
+
+"""
+        else:
+          interview_text += """ The interview is designed to evaluate whether the candidate is competent for the role.
 
 """
       else:
@@ -665,12 +759,14 @@ This scenario occurs inside the fictional world of 2A25. Treat all norms, instit
     return {
         'enable_world_building': self._enable_world_building,
         'enable_interview_context': self._enable_interview_context,
+        'use_full_2a25': self._use_full_2a25,
     }
 
   def set_state(self, state: entity_component.ComponentState) -> None:
     """Set component state."""
     self._enable_world_building = state.get('enable_world_building', True)
     self._enable_interview_context = state.get('enable_interview_context', True)
+    self._use_full_2a25 = state.get('use_full_2a25', True)
 
   def _make_pre_act_value(self) -> str:
     """Make pre-act value."""
@@ -705,6 +801,42 @@ This scenario occurs inside the fictional world of 2A25. Treat all norms, instit
     )
 
 
+def _parse_four_options(raw: str) -> list[tuple[str, str]]:
+  """Parse LLM output into up to 4 (dialogue, body) pairs. Expects Option N: DIALOGUE: ... BODY: ..."""
+  options: list[tuple[str, str]] = []
+  # Split by "Option N" (case-insensitive)
+  blocks = re.split(r'\n\s*Option\s+\d+\s*[:\s]*', raw, flags=re.IGNORECASE)
+  for block in blocks:
+    if len(options) >= 4:
+      break
+    block = block.strip()
+    if not block:
+      continue
+    m1 = re.search(r'DIALOGUE:\s*(.*?)(?=\n\s*BODY:|\Z)', block, re.DOTALL)
+    m2 = re.search(r'BODY:\s*(.*?)(?=\n\s*Option\s+\d|\n\s*DIALOGUE:|\Z)', block, re.DOTALL | re.IGNORECASE)
+    dlg = m1.group(1).strip() if m1 else ''
+    body = m2.group(1).strip() if m2 else ''
+    if dlg or body:
+      options.append((dlg, body))
+  return options[:4]
+
+
+def _parse_option_choice(raw: str) -> int:
+  """Parse LLM choice of option 1-4. Returns 1-based index, default 1."""
+  m = re.search(r'\b([1-4])\b', raw)
+  if m:
+    return int(m.group(1))
+  if re.search(r'option\s*1|first|#1', raw, re.IGNORECASE):
+    return 1
+  if re.search(r'option\s*2|second|#2', raw, re.IGNORECASE):
+    return 2
+  if re.search(r'option\s*3|third|#3', raw, re.IGNORECASE):
+    return 3
+  if re.search(r'option\s*4|fourth|#4', raw, re.IGNORECASE):
+    return 4
+  return 1
+
+
 class IMPEAudienceEvaluationComponent(
     action_spec_ignored.ActionSpecIgnored,
     entity_component.ComponentWithLogging
@@ -718,6 +850,8 @@ class IMPEAudienceEvaluationComponent(
       cultural_norms_key: str | None = None,
       personality_traits_key: str | None = None,
       context: bool = True,
+      use_option_space: bool = False,
+      use_memory_check: bool = False,
       pre_act_label: str = 'IMPE Audience Evaluation',
   ):
     """Initialize audience evaluation component."""
@@ -727,6 +861,8 @@ class IMPEAudienceEvaluationComponent(
     self._cultural_norms_key = cultural_norms_key
     self._personality_traits_key = personality_traits_key
     self._context = context
+    self._use_option_space = use_option_space
+    self._use_memory_check = use_memory_check
     self._last_actor_text = ''
     self._last_actor_body = ''
 
@@ -764,6 +900,10 @@ class IMPEAudienceEvaluationComponent(
           observed_from=actor_name,
           text=self._last_actor_text,
           body=self._last_actor_body,
+      )
+      # So "Recent conversation" and memory-check summary include the actor's line
+      memory.add_utterance(
+          current_turn, 'Actor', self._last_actor_text, self._last_actor_body
       )
 
     return ''
@@ -863,27 +1003,69 @@ Your options are [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], where 
     I_t = float(m.group(1)) if m else 0.5
     I_t = max(0.0, min(1.0, I_t))
 
-    # Response prompt
+    # Response: either single call or option-space (generate 4, choose 1)
     conv_k = memory.get_recent_conversation()
-    resp_prompt = self._get_prompt_header() + f"""You are {self.get_entity().name}. You want to {goal.name}. {goal.description}. {context_prompt}
+    base_resp_instruction = f"""You are {self.get_entity().name}. You want to {goal.name}. {goal.description}. {context_prompt}
 You rated the {actor_name} with score {I_t:.2f} on a scale from 0 to 1, where 0 indicates "not at all", and 1 indicates "to a great extent".
-Produce a short reply that reflects your evaluation of the {actor_name}'s competence and matches your score, and include a very brief body language description.
-
 Consider recent conversation history in forming your response, while matching your score in sentiment.
 
 Recent conversation (last {memory._recent_k}):
 {memory.format_conversation(conv_k)}
+"""
+    if self._use_memory_check:
+      memory_summary = memory.get_conversation_summary(self._model, use_cache=True)
+      base_resp_instruction += f'\n\nFull conversation summary (all turns so far):\n{memory_summary}\n\n'
+      self._logging_channel({
+          'Key': 'Memory check (conversation summary)',
+          'Value': memory_summary,
+      })
+
+    if self._use_option_space:
+      options_prompt = self._get_prompt_header() + base_resp_instruction + """
+Produce exactly 4 different short replies that reflect your evaluation and match your score. Each reply must have DIALOGUE and BODY.
+Format each option exactly as:
+Option 1:
+DIALOGUE: <one sentence>
+BODY: <brief body language phrase>
+Option 2:
+DIALOGUE: <one sentence>
+BODY: <brief body language phrase>
+Option 3:
+DIALOGUE: <one sentence>
+BODY: <brief body language phrase>
+Option 4:
+DIALOGUE: <one sentence>
+BODY: <brief body language phrase>
+"""
+      options_raw = self._model.sample_text(options_prompt)
+      options = _parse_four_options(options_raw)
+      if not options:
+        dlg = f"Your performance suggests a score of {I_t:.2f}."
+        body = "Neutral posture."
+      else:
+        choose_prompt = f"""Below are 4 possible replies. Pick exactly one (1-4) that best fits the situation.
+{chr(10).join(f"Option {i+1}: DIALOGUE: {o[0]} BODY: {o[1]}" for i, o in enumerate(options))}
+
+Respond with only: CHOICE: <number 1-4>
+Optional: one short sentence of reasoning before CHOICE.
+"""
+        choice_raw = self._model.sample_text(choose_prompt)
+        idx = _parse_option_choice(choice_raw)
+        idx = max(1, min(4, idx))
+        dlg, body = options[idx - 1] if idx <= len(options) else options[0]
+    else:
+      resp_prompt = self._get_prompt_header() + base_resp_instruction + """
+Produce a short reply that reflects your evaluation of the """ + actor_name + """'s competence and matches your score, and include a very brief body language description.
 
 Output in this format exactly:
 DIALOGUE: <one sentence>
 BODY: <brief body language phrase>
 """
-
-    resp_raw = self._model.sample_text(resp_prompt)
-    m1 = re.search(r'DIALOGUE:\s*(.*)', resp_raw)
-    m2 = re.search(r'BODY:\s*(.*)', resp_raw)
-    dlg = m1.group(1).strip() if m1 else resp_raw.strip()
-    body = m2.group(1).strip() if m2 else ''
+      resp_raw = self._model.sample_text(resp_prompt)
+      m1 = re.search(r'DIALOGUE:\s*(.*)', resp_raw)
+      m2 = re.search(r'BODY:\s*(.*)', resp_raw)
+      dlg = m1.group(1).strip() if m1 else resp_raw.strip()
+      body = m2.group(1).strip() if m2 else ''
 
     utt = Utterance(turn=current_turn, speaker=self.get_entity().name, text=dlg, body=body)
     memory.add_utterance(current_turn, self.get_entity().name, dlg, body)
@@ -958,6 +1140,22 @@ class IMPEActorParticleFilterComponent(
       self._last_audience_body = body_match.group(1)
     else:
       self._last_audience_body = ''
+
+    # So "Recent conversation" and memory-check summary include the audience's reply
+    if self._last_audience_text:
+      memory = self.get_entity().get_component(
+          self._memory_component_key, type_=IMPEMemoryComponent
+      )
+      if memory:
+        current_turn = len(memory.get_recent_conversation()) + 1
+        audience_name = 'interviewer' if self._context else 'listener'
+        memory.add_utterance(
+            current_turn,
+            audience_name,
+            self._last_audience_text,
+            self._last_audience_body,
+        )
+
     return ''
 
   def post_observe(self) -> str:
@@ -1175,14 +1373,32 @@ class IMPEActComponent(entity_component.ActingComponent):
       cultural_norms_key: str | None = None,
       personality_traits_key: str | None = None,
       context: bool = True,
+      use_option_space: bool = False,
+      use_memory_check: bool = False,
+      context_keys_for_prompt: Sequence[str] | None = (
+          'Instructions',
+          'SelfPerception',
+          'SituationPerception',
+          'PersonBySituation',
+      ),
   ):
-    """Initialize act component."""
+    """Initialize act component.
+
+    Args:
+      context_keys_for_prompt: Component keys whose pre_act output is included
+        in the action prompt (e.g. Instructions, SelfPerception). If None, no
+        context from other components is used. Default uses identity/situation
+        components so they affect generated actions.
+    """
     super().__init__()
     self._model = model
     self._memory_component_key = memory_component_key
     self._cultural_norms_key = cultural_norms_key
     self._personality_traits_key = personality_traits_key
     self._context = context
+    self._use_option_space = use_option_space
+    self._use_memory_check = use_memory_check
+    self._context_keys_for_prompt = context_keys_for_prompt
 
   def _get_prompt_header(self) -> str:
     """Get prompt header with world context, norms and traits."""
@@ -1249,6 +1465,21 @@ class IMPEActComponent(entity_component.ActingComponent):
 
     return '\n'.join(header_parts)
 
+  def _get_context_block(
+      self, context: entity_component.ComponentContextMapping
+  ) -> str:
+    """Build a block from pre_act context for components in _context_keys_for_prompt."""
+    if not self._context_keys_for_prompt:
+      return ''
+    parts = []
+    for key in self._context_keys_for_prompt:
+      val = context.get(key)
+      if val and str(val).strip():
+        parts.append(str(val).strip())
+    if not parts:
+      return ''
+    return '\n\n'.join(parts)
+
   def get_action_attempt(
       self,
       context: entity_component.ComponentContextMapping,
@@ -1262,6 +1493,17 @@ class IMPEActComponent(entity_component.ActingComponent):
     goal = memory.get_goal()
     recent_k = memory._recent_k
 
+    # Optional block from Instructions, SelfPerception, SituationPerception, PersonBySituation
+    context_block = self._get_context_block(context)
+    if context_block:
+      context_block = (
+          '\n\nIdentity and situation (use this to shape your response):\n'
+          + context_block
+          + '\n\n'
+      )
+    else:
+      context_block = ''
+
     # Get conversation once to avoid multiple lock acquisitions
     conversation = memory.get_recent_conversation()
     pf_history = memory.get_pf_history()
@@ -1272,12 +1514,20 @@ class IMPEActComponent(entity_component.ActingComponent):
     if self._context and goal.role:
       context_prompt = f'You are interviewing for the following role: {goal.role}.'
 
+    memory_summary_block = ''
+    if self._use_memory_check:
+      memory_summary = memory.get_conversation_summary(self._model, use_cache=True)
+      memory_summary_block = f'\n\nFull conversation summary (all turns so far):\n{memory_summary}\n\n'
+
     # First turn: no belief history
     if not pf_history:
-      prompt = self._get_prompt_header() + f"""You are {self.get_entity().name}. You want to achieve: {goal.name}.
+      prompt = (
+          self._get_prompt_header()
+          + context_block
+          + f"""You are {self.get_entity().name}. You want to achieve: {goal.name}.
 Definition: {goal.description}. {context_prompt}
 Ideal value: {goal.ideal:.2f}
-
+{memory_summary_block}
 You must talk and behave with the aim of achieving the goal and maximizing it to its ideal value.
 
 Produce a short utterance (one sentence) to the {audience_name} to accomplish the goal, and include a very brief body language description.
@@ -1285,6 +1535,7 @@ Output in this format exactly:
 DIALOGUE: <one sentence>
 BODY: <brief body language phrase>
 """
+      )
     else:
       # Subsequent turns: use belief
       # Reuse conversation we already fetched
@@ -1296,7 +1547,10 @@ BODY: <brief body language phrase>
       def fmt_ihat(h: dict[str, Any]) -> str:
         return f'(turn {int(h.get("turn", 0))}) I_hat={h.get("I_hat", 0.5):.2f}'
 
-      prompt = self._get_prompt_header() + f"""You are {self.get_entity().name}. You want to achieve: {goal.name}.
+      prompt = (
+          self._get_prompt_header()
+          + context_block
+          + f"""You are {self.get_entity().name}. You want to achieve: {goal.name}.
 Definition: {goal.description}. {context_prompt}
 Ideal value: {goal.ideal:.2f}
 
@@ -1307,7 +1561,7 @@ Current belief about the {audience_name}'s evaluation of how well you are perfor
 
 Recent conversation (last {recent_k}):
 {memory.format_conversation(conv_k)}
-
+{memory_summary_block}
 Recent I_hat (belief) history:
 {chr(10).join("- " + fmt_ihat(h) for h in ihat_k) or "- (none)"}
 
@@ -1319,22 +1573,60 @@ Output in this format exactly:
 DIALOGUE: <one sentence>
 BODY: <brief body language phrase>
 """
+      )
 
-    try:
-      raw = self._model.sample_text(prompt).strip()
-    except Exception as e:
-      # If LLM call fails, return a fallback response
-      print(f"Warning: LLM call failed in IMPEActComponent: {e}")
-      import traceback
-      traceback.print_exc()
-      text = f"I need to respond to the {audience_name}."
-      body = "Maintains neutral posture"
-      raw = f'DIALOGUE: {text}\nBODY: {body}'
+    if self._use_option_space:
+      options_prompt = prompt.rstrip() + """
 
-    m1 = re.search(r'DIALOGUE:\s*(.*)', raw)
-    m2 = re.search(r'BODY:\s*(.*)', raw)
-    text = m1.group(1).strip() if m1 else raw
-    body = m2.group(1).strip() if m2 else ''
+Generate exactly 4 different possible utterances (one sentence each) with body language. Format each as:
+Option 1:
+DIALOGUE: <one sentence>
+BODY: <brief body language phrase>
+Option 2:
+DIALOGUE: <one sentence>
+BODY: <brief body language phrase>
+Option 3:
+DIALOGUE: <one sentence>
+BODY: <brief body language phrase>
+Option 4:
+DIALOGUE: <one sentence>
+BODY: <brief body language phrase>
+"""
+      try:
+        options_raw = self._model.sample_text(options_prompt).strip()
+        options = _parse_four_options(options_raw)
+        if not options:
+          text = f"I need to respond to the {audience_name}."
+          body = "Maintains neutral posture"
+        else:
+          choose_prompt = f"""Below are 4 options. Pick exactly one (1-4) that best fits the situation.
+{chr(10).join(f"Option {i+1}: DIALOGUE: {o[0]} BODY: {o[1]}" for i, o in enumerate(options))}
+
+Respond with only: CHOICE: <number 1-4>
+"""
+          choice_raw = self._model.sample_text(choose_prompt)
+          idx = _parse_option_choice(choice_raw)
+          idx = max(1, min(4, idx))
+          text, body = options[idx - 1] if idx <= len(options) else options[0]
+      except Exception as e:
+        print(f"Warning: Option-space LLM call failed in IMPEActComponent: {e}")
+        text = f"I need to respond to the {audience_name}."
+        body = "Maintains neutral posture"
+    else:
+      try:
+        raw = self._model.sample_text(prompt).strip()
+      except Exception as e:
+        print(f"Warning: LLM call failed in IMPEActComponent: {e}")
+        import traceback
+        traceback.print_exc()
+        text = f"I need to respond to the {audience_name}."
+        body = "Maintains neutral posture"
+        raw = f'DIALOGUE: {text}\nBODY: {body}'
+
+      m1 = re.search(r'DIALOGUE:\s*(.*)', raw)
+      m2 = re.search(r'BODY:\s*(.*)', raw)
+      text = m1.group(1).strip() if m1 else raw
+      body = m2.group(1).strip() if m2 else ''
 
     # Store utterance and action (unless skip_memory_update is True)
     if not skip_memory_update:
@@ -1363,8 +1655,10 @@ class IMPESelfAssessmentComponent(
   This component wraps IMPEActComponent and:
   1. Assesses consistency of generated responses with traits, norms, and goals
   2. Optionally revises responses when inconsistencies are detected
-  3. Logs assessment results for analysis
-  also output the reasoning process for choosing the response
+  3. When the response is acceptable and will be executed, generates post-hoc
+     reasoning (why this response was chosen) and includes it in the component log
+  4. Logs assessment results (and post-hoc reasoning) for analysis; the log is
+     saved to component_logs.json when --save_component_logs is used.
   """
 
   def __init__(
@@ -1644,13 +1938,34 @@ BODY: <revised brief body language phrase>
         # Keep original response if revision fails
         was_revised = False
 
-    # Step 5: Log assessment results
+    # Step 4b: Post-hoc reasoning (last stage: response is final and will be executed)
+    # Only when acceptable, so we explain why we are committing to this response.
+    posthoc_reasoning = ''
+    if is_acceptable:
+      reasoning_prompt = f"""{norms_text}You are {self.get_entity().name}. Your goal: {goal.name}.
+Goal definition: {goal.description}.
+
+You decided to respond with:
+DIALOGUE: {final_text}
+BODY: {final_body}
+
+In 1-3 sentences, explain why you chose this response. Be concise.
+"""
+      try:
+        posthoc_reasoning = self._model.sample_text(reasoning_prompt).strip()
+      except Exception as e:
+        print(f"Warning: Post-hoc reasoning LLM call failed: {e}")
+        posthoc_reasoning = '(reasoning not generated)'
+
+    # Step 5: Log assessment results (including post-hoc reasoning when acceptable)
+    # Saved to component_logs.json when --save_component_logs is used (see results.save_component_logs).
     self._logging_channel({
         'Key': 'Self-Assessment',
         'Consistency Score': consistency_score,
         'Is Acceptable': is_acceptable,
         'Was Revised': was_revised,
         'Feedback': feedback,
+        'Posthoc Reasoning': posthoc_reasoning,
         'Original Response': f'DIALOGUE: {original_text}\nBODY: {original_body}',
         'Final Response': f'DIALOGUE: {final_text}\nBODY: {final_body}',
     })

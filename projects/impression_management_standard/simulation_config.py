@@ -21,12 +21,16 @@ from concordia.prefabs.game_master import impression_management_pe as impe_gm
 def create_simulation_config(
     config: ConversationConfig,
     rng: random.Random,
+    traits_override: list[Any] | None = None,
 ) -> prefab_lib.Config:
     """Create Config object with prefabs and instances.
 
     Args:
         config: Conversation configuration.
         rng: Random number generator.
+        traits_override: Optional list of PersonalityTrait to use instead of
+            constants.ALL_TRAITS. When None, use None if config.no_traits
+            else constants.ALL_TRAITS.
 
     Returns:
         Config object for simulation.
@@ -43,7 +47,10 @@ def create_simulation_config(
 
     # Prepare traits and norms
     cultural_norms = None if config.no_audience_norms else constants.ALL_CULTURAL_NORMS
-    traits = None if config.no_traits else constants.ALL_TRAITS
+    if traits_override is not None:
+        traits = traits_override
+    else:
+        traits = None if config.no_traits else constants.ALL_TRAITS
 
     trait_scores_actor = {}
     trait_scores_audience = {}
@@ -51,7 +58,31 @@ def create_simulation_config(
         trait_scores_actor = utils.generate_trait_scores(rng, traits, is_audience=False)
         trait_scores_audience = utils.generate_trait_scores(rng, traits, is_audience=True)
 
-    goal_role = constants.DEFAULT_INTERVIEW_ROLE if not config.no_context else None
+    # Resolve interview role from preset; optionally append question/experience banks
+    goal_role_actor = None
+    goal_role_audience = None
+    if not config.no_context:
+        base_role = constants.INTERVIEW_ROLE_PRESETS.get(
+            config.interview_role_preset
+        ) or constants.DEFAULT_INTERVIEW_ROLE
+        question_bank = [] if config.no_question_bank else constants.INTERVIEW_QUESTION_BANKS.get(
+            config.interview_role_preset, []
+        )
+        experience_bank = [] if config.no_experience_bank else constants.INTERVIEW_EXPERIENCE_BANKS.get(
+            config.interview_role_preset, []
+        )
+        if experience_bank:
+            goal_role_actor = base_role + "\n\nYou can draw on experiences such as:\n" + "\n".join(
+                "- " + ex for ex in experience_bank
+            )
+        else:
+            goal_role_actor = base_role
+        if question_bank:
+            goal_role_audience = base_role + "\n\nYou can ask questions such as:\n" + "\n".join(
+                "- " + q for q in question_bank
+            )
+        else:
+            goal_role_audience = base_role
 
     # Create goal objects for params
     goal_actor_name = 'competence'
@@ -75,14 +106,14 @@ def create_simulation_config(
                 'name': config.actor_name,
                 'goal_name': goal_actor_name,
                 'goal_description': goal_actor_description,
-                'goal_role': goal_role,
+                'goal_role': goal_role_actor,
                 'goal_ideal': 1.0,
                 'recent_k': config.window,
                 'num_particles': constants.DEFAULT_NUM_PARTICLES,
                 'process_sigma': constants.DEFAULT_PROCESS_SIGMA,
                 'obs_sigma': constants.DEFAULT_OBS_SIGMA,
                 'context': not config.no_context,
-                'cultural_norms': None,  # Actor doesn't have norms
+                'cultural_norms': cultural_norms if config.actor_has_norms else None,
                 'traits': traits,
                 'trait_scores': trait_scores_actor,
                 'enable_self_assessment': config.enable_self_assessment,
@@ -94,6 +125,10 @@ def create_simulation_config(
                 'enable_person_by_situation': config.enable_person_by_situation,
                 'enable_world_building': not config.no_world_building,
                 'enable_interview_context': not config.no_interview_context,
+                'use_trait_paragraph': config.use_trait_paragraph,
+                'use_option_space': config.use_option_space,
+                'use_full_2a25_world': config.use_full_2a25_world,
+                'use_memory_check': config.use_memory_check,
             },
         ),
         # Audience entity (simple version for standard loop)
@@ -104,7 +139,7 @@ def create_simulation_config(
                 'name': config.audience_name,
                 'goal_name': goal_audience_name,
                 'goal_description': goal_audience_description,
-                'goal_role': goal_role,
+                'goal_role': goal_role_audience,
                 'goal_ideal': 1.0,
                 'recent_k': config.window,
                 'context': not config.no_context,
@@ -120,6 +155,10 @@ def create_simulation_config(
                 'enable_person_by_situation': config.enable_person_by_situation,
                 'enable_world_building': not config.no_world_building,
                 'enable_interview_context': not config.no_interview_context,
+                'use_trait_paragraph': config.use_trait_paragraph,
+                'use_option_space': config.use_option_space,
+                'use_full_2a25_world': config.use_full_2a25_world,
+                'use_memory_check': config.use_memory_check,
             },
         ),
         # Game master
