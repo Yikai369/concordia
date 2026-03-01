@@ -658,8 +658,14 @@ class PersonalityTraitsComponent(
     self._trait_paragraph_cache = state.get('trait_paragraph_cache')
 
   def _make_pre_act_value(self) -> str:
-    """Make pre-act value."""
-    return self.get_traits_text()
+    """Make pre-act value and log it to the component channel (for component_logs.json)."""
+    value = self.get_traits_text()
+    if value:
+      self._logging_channel({
+          'Key': self.get_pre_act_label(),
+          'Value': value,
+      })
+    return value
 
 
 # Minimal world-building text (no Cadens/Riffers detail), used when use_full_2a25=False
@@ -1020,6 +1026,9 @@ Recent conversation (last {memory._recent_k}):
           'Value': memory_summary,
       })
 
+    options_for_log: list[dict[str, str]] | None = None
+    chosen_idx_for_log: int | None = None
+
     if self._use_option_space:
       options_prompt = self._get_prompt_header() + base_resp_instruction + """
 Produce exactly 4 different short replies that reflect your evaluation and match your score. Each reply must have DIALOGUE and BODY.
@@ -1042,6 +1051,8 @@ BODY: <brief body language phrase>
       if not options:
         dlg = f"Your performance suggests a score of {I_t:.2f}."
         body = "Neutral posture."
+        options_for_log = []
+        chosen_idx_for_log = 0
       else:
         choose_prompt = f"""Below are 4 possible replies. Pick exactly one (1-4) that best fits the situation.
 {chr(10).join(f"Option {i+1}: DIALOGUE: {o[0]} BODY: {o[1]}" for i, o in enumerate(options))}
@@ -1053,6 +1064,8 @@ Optional: one short sentence of reasoning before CHOICE.
         idx = _parse_option_choice(choice_raw)
         idx = max(1, min(4, idx))
         dlg, body = options[idx - 1] if idx <= len(options) else options[0]
+        options_for_log = [{'dialogue': d, 'body': b} for (d, b) in options]
+        chosen_idx_for_log = idx
     else:
       resp_prompt = self._get_prompt_header() + base_resp_instruction + """
 Produce a short reply that reflects your evaluation of the """ + actor_name + """'s competence and matches your score, and include a very brief body language description.
@@ -1072,10 +1085,15 @@ BODY: <brief body language phrase>
     memory.add_evaluation_record(current_turn, I_t, utt)
 
     result = f'Evaluated I_t: {I_t:.2f}, Response: "{dlg}"'
-    self._logging_channel({
+    log_payload: dict[str, Any] = {
         'Key': self.get_pre_act_label(),
-        'Value': result
-    })
+        'Value': result,
+    }
+    if options_for_log is not None and chosen_idx_for_log is not None:
+      log_payload['Options'] = options_for_log
+      log_payload['Chosen Index'] = chosen_idx_for_log
+      log_payload['Chosen'] = f'DIALOGUE: {dlg}\nBODY: {body}'
+    self._logging_channel(log_payload)
     return result
 
   def get_state(self) -> entity_component.ComponentState:
@@ -1363,7 +1381,10 @@ Write a short reflection: What will you change next turn to improve your goal ac
     self._last_reflection = state.get('last_reflection', '')
 
 
-class IMPEActComponent(entity_component.ActingComponent):
+class IMPEActComponent(
+    entity_component.ActingComponent,
+    entity_component.ComponentWithLogging,
+):
   """Component for generating utterances based on belief."""
 
   def __init__(
@@ -1598,6 +1619,8 @@ BODY: <brief body language phrase>
         if not options:
           text = f"I need to respond to the {audience_name}."
           body = "Maintains neutral posture"
+          options_list: list[dict[str, str]] = []
+          chosen_idx = 0
         else:
           choose_prompt = f"""Below are 4 options. Pick exactly one (1-4) that best fits the situation.
 {chr(10).join(f"Option {i+1}: DIALOGUE: {o[0]} BODY: {o[1]}" for i, o in enumerate(options))}
@@ -1608,6 +1631,16 @@ Respond with only: CHOICE: <number 1-4>
           idx = _parse_option_choice(choice_raw)
           idx = max(1, min(4, idx))
           text, body = options[idx - 1] if idx <= len(options) else options[0]
+          options_list = [
+              {'dialogue': d, 'body': b} for (d, b) in options
+          ]
+          chosen_idx = idx
+        self._logging_channel({
+            'Key': 'Option Space',
+            'Options': options_list,
+            'Chosen Index': chosen_idx,
+            'Chosen': f'DIALOGUE: {text}\nBODY: {body}',
+        })
       except Exception as e:
         print(f"Warning: Option-space LLM call failed in IMPEActComponent: {e}")
         text = f"I need to respond to the {audience_name}."
