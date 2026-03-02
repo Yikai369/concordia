@@ -20,7 +20,8 @@ import dataclasses
 from concordia.agents import entity_agent_with_logging
 from concordia.associative_memory import basic_associative_memory
 from concordia.components import agent as agent_components
-from concordia.components.agent import impression_management_pe as impe_components
+from concordia.components.agent import \
+    impression_management_pe as impe_components
 from concordia.components.agent import instructions
 from concordia.components.agent import question_of_recent_memories
 from concordia.language_model import language_model
@@ -37,13 +38,13 @@ class Entity(prefab_lib.Prefab):
   )
   params: Mapping[str, str | float | bool] = dataclasses.field(
       default_factory=lambda: {
-          'name': 'John',
+          'name': 'Riffer',
           'goal_name': 'competence',
           'goal_description': (
               'Be perceived as competent by the interviewer '
               '(0=not competent, 1=fully competent). Aim for 1.0.'
           ),
-          'goal_role': 'Product Manager',
+          'goal_role': 'Customer Service Agent',
           'goal_ideal': 1.0,
           'recent_k': 3,
           'num_particles': 200,
@@ -51,15 +52,20 @@ class Entity(prefab_lib.Prefab):
           'obs_sigma': 0.08,
           'context': True,
           'cultural_norms': None,
-          'traits': None,
-          'trait_scores': None,
+          'traits_paragraph': None,
           'enable_instructions': True,
           'enable_self_perception': True,
           'enable_situation_perception': False,
           'enable_person_by_situation': False,
           'enable_world_building': True,
           'enable_interview_context': True,
+            'use_option_space': True,
       }
+  )
+  _llm_model: language_model.LanguageModel | None = dataclasses.field(
+      init=False,
+      default=None,
+      repr=False,
   )
 
   def build(
@@ -76,13 +82,13 @@ class Entity(prefab_lib.Prefab):
     Returns:
       An entity agent with IMPE components.
     """
-    entity_name = self.params.get('name', 'John')
+    entity_name = self.params.get('name', 'Riffer')
     goal_name = self.params.get('goal_name', 'competence')
     goal_description = self.params.get(
         'goal_description',
         'Be perceived as competent by the interviewer (0=not competent, 1=fully competent). Aim for 1.0.',
     )
-    goal_role = self.params.get('goal_role', 'Product Manager')
+    goal_role = self.params.get('goal_role', 'Customer Service Agent')
     goal_ideal = float(self.params.get('goal_ideal', 1.0))
     recent_k = int(self.params.get('recent_k', 3))
     num_particles = int(self.params.get('num_particles', 200))
@@ -90,8 +96,8 @@ class Entity(prefab_lib.Prefab):
     obs_sigma = float(self.params.get('obs_sigma', 0.08))
     context = bool(self.params.get('context', True))
     cultural_norms = self.params.get('cultural_norms')
-    traits = self.params.get('traits')
-    trait_scores = self.params.get('trait_scores')
+    traits_paragraph = self.params.get('traits_paragraph')
+    self._llm_model = model
 
     # Create goal
     goal = impe_components.Goal(
@@ -188,14 +194,20 @@ class Entity(prefab_lib.Prefab):
 
     # Personality Traits component (optional)
     personality_traits_key = None
-    use_trait_paragraph = bool(self.params.get('use_trait_paragraph', False))
-    if traits:
+    personality_traits_comp = None
+    if traits_paragraph:
+
+      traits_for_component = [
+          impe_components.PersonalityTrait(
+              name='Profile',
+              assertion=str(traits_paragraph),
+          )
+      ]
       personality_traits_key = impe_components.DEFAULT_PERSONALITY_TRAITS_COMPONENT_KEY
       personality_traits_comp = impe_components.PersonalityTraitsComponent(
-          traits=traits,
-          trait_scores=trait_scores or {},
-          use_trait_paragraph=use_trait_paragraph,
-          model=model if use_trait_paragraph else None,
+          traits=traits_for_component,
+          use_trait_paragraph=True,
+          model=model,
           pre_act_label='\nPersonality Traits',
       )
 
@@ -252,7 +264,7 @@ class Entity(prefab_lib.Prefab):
     )
 
     # IMPE Act component (base)
-    use_option_space = bool(self.params.get('use_option_space', False))
+    use_option_space = bool(self.params.get('use_option_space', True))
     use_memory_check = bool(self.params.get('use_memory_check', False))
     base_act_component = impe_components.IMPEActComponent(
         model=model,

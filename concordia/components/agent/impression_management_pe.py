@@ -14,7 +14,8 @@
 
 """Components for Impression Management PE (Prediction Error) conversation."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import asdict
 from dataclasses import dataclass
 import math
@@ -28,7 +29,6 @@ from concordia.components.agent import pe_conversation as pe_components
 from concordia.language_model import language_model
 from concordia.typing import entity as entity_lib
 from concordia.typing import entity_component
-
 
 # Import extended data classes from pe_conversation
 Goal = pe_components.Goal
@@ -594,7 +594,6 @@ class PersonalityTraitsComponent(
     """Initialize personality traits component."""
     super().__init__(pre_act_label)
     self._traits = traits or []
-    self._trait_scores = trait_scores or {}
     self._use_trait_paragraph = use_trait_paragraph
     self._model = model
     self._trait_paragraph_cache: str | None = None
@@ -624,7 +623,14 @@ class PersonalityTraitsComponent(
       if self._trait_paragraph_cache is None:
         self._trait_paragraph_cache = self._generate_trait_paragraph()
       if self._trait_paragraph_cache:
-        return 'PERSONALITY (summary):\n' + self._trait_paragraph_cache + '\n'
+        entity = self.get_entity()
+        agent_name = entity.name if entity else 'This person'
+        traits_prompt = (
+            f'The following paragraph describes {agent_name} interactions '
+            'and how they perceive, process, and interact with the social '
+            f'world.{self._trait_paragraph_cache}'
+        )
+        return traits_prompt
     lines = ['PERSONALITY TRAITS:']
     for trait in self._traits:
       score = self._trait_scores.get(trait.name, 0)
@@ -718,7 +724,7 @@ class WorldContextComponent(
     parts = []
 
     # World-building narrative: full 2A25 (Cadens, Riffers) or minimal generic
-    if self._enable_world_building and has_norms:
+    if self._enable_world_building:
       if self._use_full_2a25:
         world_text = """You are initializing a social simulation of an alternate reality called 2A25. The dominant cognitive-cultural order is the Cadens majority who all follow these cultural norms. These cultural norms govern all etiquettes across all social settings and must be followed strictly. Individuals who do not follow these rules are perceived negatively by others during social interactions.
 
@@ -869,19 +875,26 @@ class IMPEAudienceEvaluationComponent(
     self._context = context
     self._use_option_space = use_option_space
     self._use_memory_check = use_memory_check
+    self._last_actor_speaker = 'Actor'
     self._last_actor_text = ''
     self._last_actor_body = ''
 
   def pre_observe(self, observation: str) -> str:
     """Extract actor's utterance from observation."""
-    # Parse observation format: "Actor said: \"{text}\"\nBody language: \"{body}\""
-    text_match = re.search(r'Actor said:\s*"([^"]+)"', observation)
+    # Parse observation format: "<speaker> said: \"{text}\"\nBody language: \"{body}\""
+    text_match = re.search(r'([^\n:\"]+)\s+said:\s*"([^"]+)"', observation)
     body_match = re.search(r'Body language:\s*"([^"]+)"', observation)
     if text_match:
-      self._last_actor_text = text_match.group(1)
+      self._last_actor_speaker = text_match.group(1).strip()
+      self._last_actor_text = text_match.group(2)
     else:
-      # Fallback: try to extract from general format
-      self._last_actor_text = observation.strip()
+      # Backward-compatible fallback for legacy label + free text fallback.
+      legacy_text_match = re.search(r'Actor said:\s*"([^"]+)"', observation)
+      if legacy_text_match:
+        self._last_actor_speaker = 'Actor'
+        self._last_actor_text = legacy_text_match.group(1)
+      else:
+        self._last_actor_text = observation.strip()
     if body_match:
       self._last_actor_body = body_match.group(1)
     else:
@@ -897,7 +910,7 @@ class IMPEAudienceEvaluationComponent(
       # Try to get actor name from most recent conversation entry
       # (the person who just spoke is the one we're observing)
       conv = memory.get_recent_conversation()
-      actor_name = 'Actor'  # Default fallback
+      actor_name = self._last_actor_speaker or 'Actor'
       if conv:
         # The most recent speaker is the one we're observing
         actor_name = conv[-1].speaker
@@ -909,7 +922,10 @@ class IMPEAudienceEvaluationComponent(
       )
       # So "Recent conversation" and memory-check summary include the actor's line
       memory.add_utterance(
-          current_turn, 'Actor', self._last_actor_text, self._last_actor_body
+          current_turn,
+          actor_name,
+          self._last_actor_text,
+          self._last_actor_body,
       )
 
     return ''
@@ -1010,12 +1026,21 @@ Your options are [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], where 
     I_t = max(0.0, min(1.0, I_t))
 
     # Response: either single call or option-space (generate 4, choose 1)
-    conv_k = memory.get_recent_conversation()
+    full_conversation = memory.get_full_conversation()
+    if len(full_conversation) < 10:
+      conv_k = full_conversation
+      conversation_label = f'all previous conversation so far ({len(conv_k)} utterances)'
+    else:
+      conv_k = memory.get_recent_conversation()
+      conversation_label = f'last {memory._recent_k}'
     base_resp_instruction = f"""You are {self.get_entity().name}. You want to {goal.name}. {goal.description}. {context_prompt}
 You rated the {actor_name} with score {I_t:.2f} on a scale from 0 to 1, where 0 indicates "not at all", and 1 indicates "to a great extent".
+  Write your reply directly to this person in second person (use "you"/"your").
+  Do not refer to them in third person (e.g., "the {actor_name}", "they").
+  Start by responding to their most recent message: "{self._last_actor_text}".
 Consider recent conversation history in forming your response, while matching your score in sentiment.
 
-Recent conversation (last {memory._recent_k}):
+Recent conversation ({conversation_label}):
 {memory.format_conversation(conv_k)}
 """
     if self._use_memory_check:
@@ -1031,7 +1056,7 @@ Recent conversation (last {memory._recent_k}):
 
     if self._use_option_space:
       options_prompt = self._get_prompt_header() + base_resp_instruction + """
-Produce exactly 4 different short replies that reflect your evaluation and match your score. Each reply must have DIALOGUE and BODY.
+    Produce exactly 4 different short replies that reflect your evaluation and match your score. Each reply must have DIALOGUE and BODY and must address the other person directly.
 Format each option exactly as:
 Option 1:
 DIALOGUE: <one sentence>
@@ -1069,6 +1094,7 @@ Optional: one short sentence of reasoning before CHOICE.
     else:
       resp_prompt = self._get_prompt_header() + base_resp_instruction + """
 Produce a short reply that reflects your evaluation of the """ + actor_name + """'s competence and matches your score, and include a very brief body language description.
+    Address them directly using second person (you/your), not third person.
 
 Output in this format exactly:
 DIALOGUE: <one sentence>
@@ -1099,12 +1125,14 @@ BODY: <brief body language phrase>
   def get_state(self) -> entity_component.ComponentState:
     """Get component state."""
     return {
+        'last_actor_speaker': self._last_actor_speaker,
         'last_actor_text': self._last_actor_text,
         'last_actor_body': self._last_actor_body,
     }
 
   def set_state(self, state: entity_component.ComponentState) -> None:
     """Set component state."""
+    self._last_actor_speaker = state.get('last_actor_speaker', 'Actor')
     self._last_actor_text = state.get('last_actor_text', '')
     self._last_actor_body = state.get('last_actor_body', '')
 
@@ -1142,18 +1170,25 @@ class IMPEActorParticleFilterComponent(
         process_sigma=process_sigma,
         obs_sigma=obs_sigma,
     )
+    self._last_audience_speaker = 'Audience'
     self._last_audience_text = ''
     self._last_audience_body = ''
 
   def pre_observe(self, observation: str) -> str:
     """Extract audience's response from observation."""
-    # Parse observation format: "Audience said: \"{text}\"\nBody language: \"{body}\""
-    text_match = re.search(r'Audience said:\s*"([^"]+)"', observation)
+    # Parse observation format: "<speaker> said: \"{text}\"\nBody language: \"{body}\""
+    text_match = re.search(r'([^\n:\"]+)\s+said:\s*"([^"]+)"', observation)
     body_match = re.search(r'Body language:\s*"([^"]+)"', observation)
     if text_match:
-      self._last_audience_text = text_match.group(1)
+      self._last_audience_speaker = text_match.group(1).strip()
+      self._last_audience_text = text_match.group(2)
     else:
-      self._last_audience_text = observation.strip()
+      legacy_text_match = re.search(r'Audience said:\s*"([^"]+)"', observation)
+      if legacy_text_match:
+        self._last_audience_speaker = 'Audience'
+        self._last_audience_text = legacy_text_match.group(1)
+      else:
+        self._last_audience_text = observation.strip()
     if body_match:
       self._last_audience_body = body_match.group(1)
     else:
@@ -1166,7 +1201,9 @@ class IMPEActorParticleFilterComponent(
       )
       if memory:
         current_turn = len(memory.get_recent_conversation()) + 1
-        audience_name = 'interviewer' if self._context else 'listener'
+        audience_name = self._last_audience_speaker or (
+            'interviewer' if self._context else 'listener'
+        )
         memory.add_utterance(
             current_turn,
             audience_name,
@@ -1275,12 +1312,14 @@ class IMPEActorParticleFilterComponent(
   def get_state(self) -> entity_component.ComponentState:
     """Get component state."""
     return {
+      'last_audience_speaker': self._last_audience_speaker,
         'last_audience_text': self._last_audience_text,
         'last_audience_body': self._last_audience_body,
     }
 
   def set_state(self, state: entity_component.ComponentState) -> None:
     """Set component state."""
+    self._last_audience_speaker = state.get('last_audience_speaker', 'Audience')
     self._last_audience_text = state.get('last_audience_text', '')
     self._last_audience_body = state.get('last_audience_body', '')
 
@@ -1525,10 +1564,16 @@ class IMPEActComponent(
     else:
       context_block = ''
 
-    # Get conversation once to avoid multiple lock acquisitions
-    conversation = memory.get_recent_conversation()
+    # Use full history for short dialogues; windowed history for longer ones.
+    full_conversation = memory.get_full_conversation()
+    if len(full_conversation) < 10:
+      conversation = full_conversation
+      conversation_label = f'all previous conversation so far ({len(conversation)} utterances)'
+    else:
+      conversation = memory.get_recent_conversation()
+      conversation_label = f'last {recent_k}'
     pf_history = memory.get_pf_history()
-    current_turn = len(conversation) + 1
+    current_turn = len(full_conversation) + 1
 
     audience_name = 'interviewer' if self._context else 'listener'
     context_prompt = ''
@@ -1550,6 +1595,8 @@ Definition: {goal.description}. {context_prompt}
 Ideal value: {goal.ideal:.2f}
 {memory_summary_block}
 You must talk and behave with the aim of achieving the goal and maximizing it to its ideal value.
+    Address the other person directly in second person ("you"/"your").
+    Start by building on their most recent message from the conversation context.
 
 Produce a short utterance (one sentence) to the {audience_name} to accomplish the goal, and include a very brief body language description.
 Output in this format exactly:
@@ -1577,10 +1624,12 @@ Ideal value: {goal.ideal:.2f}
 
 You must talk and behave with the aim of achieving the goal and maximizing it to its ideal value.
 Consider recent conversation, history, and your reflections.
+    Address the other person directly in second person ("you"/"your").
+    Respond to their most recent message first, then continue naturally.
 
 Current belief about the {audience_name}'s evaluation of how well you are performing = {I_hat:.2f} (on a scale from 0-1).
 
-Recent conversation (last {recent_k}):
+Recent conversation ({conversation_label}):
 {memory.format_conversation(conv_k)}
 {memory_summary_block}
 Recent I_hat (belief) history:

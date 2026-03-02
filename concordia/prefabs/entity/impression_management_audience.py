@@ -20,7 +20,8 @@ import dataclasses
 from concordia.agents import entity_agent_with_logging
 from concordia.associative_memory import basic_associative_memory
 from concordia.components import agent as agent_components
-from concordia.components.agent import impression_management_pe as impe_components
+from concordia.components.agent import \
+    impression_management_pe as impe_components
 from concordia.language_model import language_model
 from concordia.typing import prefab as prefab_lib
 
@@ -35,19 +36,22 @@ class Entity(prefab_lib.Prefab):
   )
   params: Mapping[str, str | float | bool] = dataclasses.field(
       default_factory=lambda: {
-          'name': 'Jane',
+          'name': 'Caden',
           'goal_name': 'evaluate',
           'goal_description': (
               'Evaluate the interviewee\'s competence '
               '(0=not competent, 1=fully competent).'
           ),
-          'goal_role': 'Product Manager',
+          'goal_role': 'Customer Service Agent',
           'goal_ideal': 1.0,
           'recent_k': 3,
           'context': True,
           'cultural_norms': None,
-          'traits': None,
-          'trait_scores': None,
+          'traits_paragraph': None,
+          'enable_world_building': True,
+          'enable_interview_context': True,
+          'use_full_2a25_world': True,
+          'use_option_space': True,
       }
   )
 
@@ -65,21 +69,27 @@ class Entity(prefab_lib.Prefab):
     Returns:
       An entity agent with IMPE components.
     """
-    entity_name = self.params.get('name', 'Jane')
+    entity_name = self.params.get('name', 'Caden')
     goal_name = self.params.get('goal_name', 'evaluate')
     goal_description = self.params.get(
         'goal_description',
         'Evaluate the interviewee\'s competence (0=not competent, 1=fully competent).',
     )
-    goal_role = self.params.get('goal_role', 'Product Manager')
+    goal_role = self.params.get('goal_role', 'Customer Service Agent')
     goal_ideal = float(self.params.get('goal_ideal', 1.0))
     recent_k = int(self.params.get('recent_k', 3))
     context = bool(self.params.get('context', True))
+    use_option_space = bool(self.params.get('use_option_space', True))
     cultural_norms = self.params.get('cultural_norms')
-    traits = self.params.get('traits')
-    trait_scores = self.params.get('trait_scores')
+    traits_paragraph = self.params.get('traits_paragraph')
+    enable_world_building = bool(
+        self.params.get('enable_world_building', True)
+    )
+    enable_interview_context = bool(
+        self.params.get('enable_interview_context', True)
+    )
+    use_full_2a25 = bool(self.params.get('use_full_2a25_world', True))
 
-    # Create goal
     goal = impe_components.Goal(
         name=goal_name,
         description=goal_description,
@@ -87,7 +97,6 @@ class Entity(prefab_lib.Prefab):
         ideal=goal_ideal,
     )
 
-    # IMPE Memory component
     impe_memory_key = impe_components.DEFAULT_IMPE_MEMORY_COMPONENT_KEY
     impe_memory = impe_components.IMPEMemoryComponent(
         goal=goal,
@@ -95,7 +104,6 @@ class Entity(prefab_lib.Prefab):
         pre_act_label='\nIMPE Memory',
     )
 
-    # Cultural Norms component (optional)
     cultural_norms_key = None
     if cultural_norms:
       cultural_norms_key = impe_components.DEFAULT_CULTURAL_NORMS_COMPONENT_KEY
@@ -103,20 +111,35 @@ class Entity(prefab_lib.Prefab):
           norms=cultural_norms,
           pre_act_label='\nCultural Norms',
       )
-      # Initialize norms (one-time setup)
       cultural_norms_comp.initialize_norms(model, entity_name)
 
-    # Personality Traits component (optional)
     personality_traits_key = None
-    if traits:
+    personality_traits_comp = None
+    if traits_paragraph:
+      traits_for_component = [
+          impe_components.PersonalityTrait(
+              name='Profile',
+              assertion=str(traits_paragraph),
+          )
+      ]
       personality_traits_key = impe_components.DEFAULT_PERSONALITY_TRAITS_COMPONENT_KEY
       personality_traits_comp = impe_components.PersonalityTraitsComponent(
-          traits=traits,
-          trait_scores=trait_scores or {},
+          traits=traits_for_component,
+          use_trait_paragraph=True,
+          model=model,
           pre_act_label='\nPersonality Traits',
       )
 
-    # Audience Evaluation component
+    world_context_key = None
+    if enable_world_building or enable_interview_context:
+      world_context_key = impe_components.DEFAULT_WORLD_CONTEXT_COMPONENT_KEY
+      world_context_comp = impe_components.WorldContextComponent(
+          enable_world_building=enable_world_building,
+          enable_interview_context=enable_interview_context,
+          use_full_2a25=use_full_2a25,
+          pre_act_label='\nWorld Context',
+      )
+
     audience_eval_key = impe_components.DEFAULT_IMPE_AUDIENCE_EVALUATION_COMPONENT_KEY
     audience_eval = impe_components.IMPEAudienceEvaluationComponent(
         model=model,
@@ -124,20 +147,18 @@ class Entity(prefab_lib.Prefab):
         cultural_norms_key=cultural_norms_key,
         personality_traits_key=personality_traits_key,
         context=context,
+        use_option_space=use_option_space,
         pre_act_label='\nAudience Evaluation',
     )
 
-    # Standard memory component (for general observations)
     memory_key = agent_components.memory.DEFAULT_MEMORY_COMPONENT_KEY
     memory = agent_components.memory.AssociativeMemory(memory_bank=memory_bank)
 
-    # Standard observation to memory
     observation_to_memory_key = 'ObservationToMemory'
     observation_to_memory = agent_components.observation.ObservationToMemory(
         memory_component_key=memory_key,
     )
 
-    # Assemble components
     components_of_agent = {
         memory_key: memory,
         impe_memory_key: impe_memory,
@@ -149,11 +170,14 @@ class Entity(prefab_lib.Prefab):
       components_of_agent[cultural_norms_key] = cultural_norms_comp
     if personality_traits_key:
       components_of_agent[personality_traits_key] = personality_traits_comp
+    if world_context_key:
+      components_of_agent[world_context_key] = world_context_comp
 
     agent = entity_agent_with_logging.EntityAgentWithLogging(
         agent_name=entity_name,
-        act_component=agent_components.constant.Constant(state=''),  # Audience doesn't act
+        act_component=agent_components.constant.Constant(state=''),
         context_components=components_of_agent,
     )
 
+    return agent
     return agent

@@ -1,28 +1,21 @@
 """Setup functions for LLM, embedder, and memory."""
 
-import sentence_transformers
-
 from concordia.associative_memory import basic_associative_memory
-from concordia.language_model import utils as language_model_utils
+from concordia.language_model import gpt_model
+import sentence_transformers
 
 from projects.impression_management.config import ConversationConfig
 
 
 def setup_language_model(config: ConversationConfig, api_key: str):
-    """Setup and return language model."""
-    if config.llm_type == 'openai':
-        return language_model_utils.language_model_setup(
-            api_type='openai',
-            model_name=config.model,
-            api_key=api_key,
-            disable_language_model=False,
-        )
-    else:
-        # Local Ollama model
-        from concordia.language_model import ollama_language_model
-        return ollama_language_model.OllamaLanguageModel(
-            model_name=config.local_model,
-        )
+    """Setup and return OpenAI language model."""
+    if config.llm_type != 'openai':
+        raise ValueError('Only llm_type=openai is supported in this setup.')
+
+    return gpt_model.GptLanguageModel(
+        model_name=config.model,
+        api_key=api_key,
+    )
 
 
 def setup_embedder_and_memory():

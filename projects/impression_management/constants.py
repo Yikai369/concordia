@@ -1,9 +1,6 @@
 """Constants for Impression Management PE Conversation."""
 
-from concordia.components.agent.impression_management_pe import (
-    CulturalNorm,
-    PersonalityTrait,
-)
+from concordia.components.agent.impression_management_pe import CulturalNorm
 
 # All 17 cultural norms
 ALL_CULTURAL_NORMS: list[CulturalNorm] = [
@@ -81,73 +78,35 @@ ALL_CULTURAL_NORMS: list[CulturalNorm] = [
     ),
 ]
 
-# All 11 personality traits
-ALL_TRAITS: list[PersonalityTrait] = [
-    PersonalityTrait(
-        "Detail-focused",
-        "I tend to focus on individual parts and details more than the big picture."
-    ),
-    PersonalityTrait(
-        "Avoids eye contact",
-        "I do not make eye contact when talking with others."
-    ),
-    PersonalityTrait(
-        "Not laid back",
-        "I am not considered \"laid back\" and am able to 'go with the flow'."
-    ),
-    PersonalityTrait(
-        "Dislikes spontaneity",
-        "I am not comfortable with spontaneity, such as going to new places and trying new things."
-    ),
-    PersonalityTrait(
-        "Repeats phrases",
-        "I use odd phrases or tend to repeat certain words or phrases over and over again."
-    ),
-    PersonalityTrait(
-        "Poor imagination",
-        "I have a poor imagination."
-    ),
-    PersonalityTrait(
-        "Not social",
-        "I do not enjoy social situations where I can meet new people and chat (i.e. parties, dances, sports, games)."
-    ),
-    PersonalityTrait(
-        "Takes things literally",
-        "I sometimes take things too literally, such as missing the point of a joke or having trouble understanding sarcasm."
-    ),
-    PersonalityTrait(
-        "Number-interested",
-        "I am very interested in things related to numbers (i.e. dates, phone numbers, etc.)."
-    ),
-    PersonalityTrait(
-        "Dislikes crowds",
-        "I do not like being around other people."
-    ),
-    PersonalityTrait(
-        "Doesn't share enjoyment",
-        "I do not like to share my enjoyment with others."
-    ),
+# Trait mode options
+TRAIT_MODE_AUDIENCE_ONLY = 'audience_only'
+TRAIT_MODE_ACTOR_ONLY = 'actor_only'
+TRAIT_MODE_BOTH = 'both'
+TRAIT_MODE_CHOICES = [
+    TRAIT_MODE_AUDIENCE_ONLY,
+    TRAIT_MODE_ACTOR_ONLY,
+    TRAIT_MODE_BOTH,
 ]
+DEFAULT_TRAIT_MODE = TRAIT_MODE_AUDIENCE_ONLY
 
 # Default interview role
-DEFAULT_INTERVIEW_ROLE = """Role: Product Manager
+DEFAULT_INTERVIEW_ROLE = """
+    Role: Customer Service Agent
 
-Responsibilities:
-- Define product vision and strategy
-- Work with engineering teams to deliver features
-- Analyze user data to inform product decisions
-- Communicate with stakeholders across the organization
+    Responsibilities:
+    - Understanding customer issues and needs
+    - Resolving problems efficiently and accurately
+    - Communicating solutions clearly and empathetically
 
-Evaluation Criteria:
-- Technical understanding of product development
-- Ability to prioritize features and manage trade-offs
-- Communication skills and stakeholder management
-- Data-driven decision making
+    The interview evaluates:
+    - Problem-solving ability
+    - Judgment and decision-making under constraints
+    - Clarity and effectiveness of communication
 """
 
 # Default agent names
-DEFAULT_ACTOR_NAME = "John"
-DEFAULT_AUDIENCE_NAME = "Jane"
+DEFAULT_ACTOR_NAME = "Riffer"
+DEFAULT_AUDIENCE_NAME = "Caden"
 
 # Default parameters
 DEFAULT_NUM_PARTICLES = 200
@@ -158,9 +117,3 @@ DEFAULT_TEMPERATURE = 0.2
 DEFAULT_TOP_P = 0.9
 DEFAULT_TURNS = 2
 DEFAULT_SEED = 7
-
-# Trait score ranges
-AUDIENCE_TRAIT_SCORE_MIN = 2
-AUDIENCE_TRAIT_SCORE_MAX = 3
-ACTOR_TRAIT_SCORE_MIN = 0
-ACTOR_TRAIT_SCORE_MAX = 1

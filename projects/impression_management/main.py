@@ -7,12 +7,12 @@ cultural norms, personality traits, and interview context.
 """
 
 import os
-import random
 import sys
 
 # Try to load .env file if python-dotenv is available
 try:
     from dotenv import load_dotenv
+
     # Load .env file from project directory
     env_path = os.path.join(os.path.dirname(__file__), '.env')
     if os.path.exists(env_path):
@@ -54,15 +54,12 @@ def main():
     model = setup.setup_language_model(cfg, api_key)
     embedder, memory_bank = setup.setup_embedder_and_memory()
 
-    # Setup random seed
-    rng = random.Random(cfg.seed)
-
     # Create goals
     goal_actor, goal_audience = entities.create_goals(cfg)
 
     # Prepare traits and norms
-    trait_scores_actor, trait_scores_audience, cultural_norms, traits = (
-        entities.prepare_traits_and_norms(cfg, rng)
+    cultural_norms, actor_has_traits, audience_has_traits = (
+        entities.prepare_traits_and_norms(cfg)
     )
 
     # Create entities
@@ -70,10 +67,9 @@ def main():
         cfg,
         goal_actor,
         goal_audience,
-        trait_scores_actor,
-        trait_scores_audience,
         cultural_norms,
-        traits,
+        actor_has_traits,
+        audience_has_traits,
         model,
         memory_bank,
     )
@@ -82,11 +78,16 @@ def main():
     game_master = entities.create_game_master(cfg, actor, audience, model, memory_bank)
 
     # Run conversation
-    conversation.run_conversation(cfg, actor, audience)
+    turn_summaries = conversation.run_conversation(cfg, actor, audience)
 
     # Extract and save results
     print("\nExtracting turn data...")
-    turn_logs = data_extraction.extract_turn_data_from_entities(actor, audience, cfg.turns)
+    turn_logs = data_extraction.extract_turn_data_from_entities(
+        actor,
+        audience,
+        cfg.turns,
+        turn_summaries=turn_summaries,
+    )
     results.save_results(cfg, turn_logs)
 
     return turn_logs

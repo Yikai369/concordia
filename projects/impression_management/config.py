@@ -5,8 +5,12 @@ import os
 import sys
 
 from projects.impression_management import constants
-from projects.impression_management.models import ConversationConfig
 from projects.impression_management import utils
+from projects.impression_management.models import ConversationConfig
+
+AUDIENCE_TRAITS_SPREADSHEET = (
+    r'C:\Users\Jennifer Zhang\concordia\projects\impression_management\data\traits\autism-measures-compilation.xlsx'
+)
 
 
 def parse_arguments() -> ConversationConfig:
@@ -56,9 +60,16 @@ def parse_arguments() -> ConversationConfig:
         help='Disable cultural norms for audience.',
     )
     parser.add_argument(
-        '--no_traits',
-        action='store_true',
-        help='Disable personality traits.',
+        '--trait_mode',
+        type=str,
+        default=constants.DEFAULT_TRAIT_MODE,
+        choices=constants.TRAIT_MODE_CHOICES,
+        help=(
+            'Trait initialization mode: '
+            'audience_only (audience traits paragraph only), '
+            'actor_only (actor traits paragraph only), '
+            'both (both traits paragraphs).'
+        ),
     )
     parser.add_argument(
         '--no_context',
@@ -115,12 +126,13 @@ def parse_arguments() -> ConversationConfig:
         window=args.window,
         outfile=args.outfile,
         no_audience_norms=args.no_audience_norms,
-        no_traits=args.no_traits,
+        trait_mode=args.trait_mode,
         no_context=args.no_context,
         seed=args.seed,
         save_dir=save_dir,
         actor_name=args.actor_name,
         audience_name=args.audience_name,
+        audience_traits_spreadsheet=AUDIENCE_TRAITS_SPREADSHEET,
         llm_type=args.llm_type,
         local_model=args.local_model,
     )

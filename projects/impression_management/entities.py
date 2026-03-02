@@ -1,16 +1,42 @@
 """Entity creation and configuration."""
 
-import random
 from typing import Any
 
+from concordia.components.agent import \
+    impression_management_pe as impe_components
 from concordia.components.agent.pe_conversation import Goal
-
-from projects.impression_management import constants
-from projects.impression_management.config import ConversationConfig
-from projects.impression_management import utils
 from concordia.prefabs.entity import impression_management_actor
 from concordia.prefabs.entity import impression_management_audience
 from concordia.prefabs.game_master import impression_management_pe as impe_gm
+import pandas as pd
+
+from projects.impression_management import constants
+from projects.impression_management.config import ConversationConfig
+
+
+def extract_traits_from_spreadsheet(
+    file_path: str,
+) -> list[impe_components.PersonalityTrait]:
+    """Extract personality traits from spreadsheet columns and non-empty cells."""
+    if not file_path:
+        return []
+
+    df = pd.read_excel(file_path, header=0)
+    traits: list[impe_components.PersonalityTrait] = []
+
+    for survey in df.columns:
+        series = df[survey].dropna()
+        for assertion in series.astype(str):
+            assertion = assertion.strip()
+            if assertion:
+                traits.append(
+                    impe_components.PersonalityTrait(
+                        name=survey,
+                        assertion=assertion,
+                    )
+                )
+
+    return traits
 
 
 def create_goals(config: ConversationConfig) -> tuple[Goal, Goal]:
@@ -42,34 +68,64 @@ def create_goals(config: ConversationConfig) -> tuple[Goal, Goal]:
 
 def prepare_traits_and_norms(
     config: ConversationConfig,
-    rng: random.Random,
-) -> tuple[dict[str, int], dict[str, int], list | None, list | None]:
-    """Prepare trait scores and cultural norms."""
+ ) -> tuple[list | None, bool, bool]:
+    """Prepare cultural norms and trait enablement for actor/audience."""
     cultural_norms = None if config.no_audience_norms else constants.ALL_CULTURAL_NORMS
-    traits = None if config.no_traits else constants.ALL_TRAITS
 
-    trait_scores_actor = {}
-    trait_scores_audience = {}
-    if traits:
-        trait_scores_actor = utils.generate_trait_scores(rng, traits, is_audience=False)
-        trait_scores_audience = utils.generate_trait_scores(rng, traits, is_audience=True)
+    if config.trait_mode == constants.TRAIT_MODE_AUDIENCE_ONLY:
+        actor_has_traits = False
+        audience_has_traits = True
+    elif config.trait_mode == constants.TRAIT_MODE_ACTOR_ONLY:
+        actor_has_traits = True
+        audience_has_traits = False
+    else:
+        actor_has_traits = True
+        audience_has_traits = True
 
-    return trait_scores_actor, trait_scores_audience, cultural_norms, traits
+    return cultural_norms, actor_has_traits, audience_has_traits
+
+
+def _traits_to_paragraph(model, agent_name: str, traits: list) -> str | None:
+    """Convert trait assertions into one initialization paragraph."""
+    if not traits:
+        return None
+
+    intro = (
+        'Write a detailed paragraph describing this person based on '
+        'statements about them. Consider how they would perceive, process, '
+        'and interact with the social world. The statements are as follows:'
+    )
+    trait_list = '\n'.join(f'- {s.assertion}' for s in traits)
+    prompt = f"""{intro}
+    {trait_list}
+    """
+    traits_paragraph = (model.sample_text(prompt) or '').strip()
+
+    return traits_paragraph
 
 
 def create_entities(
     config: ConversationConfig,
     goal_actor: Goal,
     goal_audience: Goal,
-    trait_scores_actor: dict[str, int],
-    trait_scores_audience: dict[str, int],
     cultural_norms: list | None,
-    traits: list | None,
+    actor_has_traits: bool,
+    audience_has_traits: bool,
     model,
     memory_bank,
 ) -> tuple[Any, Any]:
     """Create and build actor and audience entities."""
     goal_role = constants.DEFAULT_INTERVIEW_ROLE if not config.no_context else None
+    all_traits = extract_traits_from_spreadsheet(config.audience_traits_spreadsheet)
+
+    actor_traits_paragraph = (
+        _traits_to_paragraph(model, config.actor_name, all_traits)
+        if actor_has_traits else None
+    )
+    audience_traits_paragraph = (
+        _traits_to_paragraph(model, config.audience_name, all_traits)
+        if audience_has_traits else None
+    )
 
     # Create actor prefab
     actor_prefab = impression_management_actor.Entity()
@@ -84,9 +140,11 @@ def create_entities(
         'process_sigma': constants.DEFAULT_PROCESS_SIGMA,
         'obs_sigma': constants.DEFAULT_OBS_SIGMA,
         'context': not config.no_context,
-        'cultural_norms': None,  # Actor doesn't have norms
-        'traits': traits,
-        'trait_scores': trait_scores_actor,
+        'cultural_norms': cultural_norms,
+        'traits_paragraph': actor_traits_paragraph,
+        'enable_world_building': True,
+        'enable_interview_context': True,
+        'use_full_2a25_world': True,
     }
 
     # Create audience prefab
@@ -100,8 +158,10 @@ def create_entities(
         'recent_k': config.window,
         'context': not config.no_context,
         'cultural_norms': cultural_norms,
-        'traits': traits,
-        'trait_scores': trait_scores_audience,
+        'traits_paragraph': audience_traits_paragraph,
+        'enable_world_building': True,
+        'enable_interview_context': True,
+        'use_full_2a25_world': True,
     }
 
     # Build entities
