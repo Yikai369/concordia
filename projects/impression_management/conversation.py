@@ -98,7 +98,7 @@ def run_conversation_turn(
         print("Actor updating particle filter...")
         audience_utt = evaluations[-1].utterance
         audience_obs = (
-            f'{audience_utt.speaker} said: "{audience_utt.text}"\n'
+            f'{audience_utt.actor} said: "{audience_utt.text}"\n'
             f'Body language: "{audience_utt.body}"'
         )
         actor_pf.pre_observe(audience_obs)

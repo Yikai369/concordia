@@ -6,10 +6,9 @@ import random
 import re
 from typing import Any
 
-from concordia.components.agent.impression_management_pe import (
-    CulturalNorm,
-    PersonalityTrait,
-)
+from concordia.components.agent.impression_management_pe import CulturalNorm
+from concordia.components.agent.impression_management_pe import \
+    PersonalityTrait
 
 
 def parse_index_list(s: str | None) -> list[int]:
@@ -62,7 +61,7 @@ def format_conversation(utterances: list) -> str:
   if not utterances:
     return '- (none)'
   return '\n'.join(
-      f'- [t={u.turn} {u.speaker}] {u.text}' for u in utterances
+      f'- [t={u.turn} {u.actor}] {u.text}' for u in utterances
   )
 
 

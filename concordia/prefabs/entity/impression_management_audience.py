@@ -51,7 +51,6 @@ class Entity(prefab_lib.Prefab):
           'enable_world_building': True,
           'enable_interview_context': True,
           'use_full_2a25_world': True,
-          'use_option_space': True,
       }
   )
 
@@ -79,7 +78,6 @@ class Entity(prefab_lib.Prefab):
     goal_ideal = float(self.params.get('goal_ideal', 1.0))
     recent_k = int(self.params.get('recent_k', 3))
     context = bool(self.params.get('context', True))
-    use_option_space = bool(self.params.get('use_option_space', True))
     cultural_norms = self.params.get('cultural_norms')
     traits_paragraph = self.params.get('traits_paragraph')
     enable_world_building = bool(
@@ -88,6 +86,7 @@ class Entity(prefab_lib.Prefab):
     enable_interview_context = bool(
         self.params.get('enable_interview_context', True)
     )
+    use_memory_check = bool(self.params.get('use_memory_check', False))
     use_full_2a25 = bool(self.params.get('use_full_2a25_world', True))
 
     goal = impe_components.Goal(
@@ -147,7 +146,7 @@ class Entity(prefab_lib.Prefab):
         cultural_norms_key=cultural_norms_key,
         personality_traits_key=personality_traits_key,
         context=context,
-        use_option_space=use_option_space,
+        use_memory_check=use_memory_check,
         pre_act_label='\nAudience Evaluation',
     )
 
@@ -179,5 +178,4 @@ class Entity(prefab_lib.Prefab):
         context_components=components_of_agent,
     )
 
-    return agent
     return agent

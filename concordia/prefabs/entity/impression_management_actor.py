@@ -340,12 +340,6 @@ class Entity(prefab_lib.Prefab):
     if personality_traits_key:
       components_of_agent[personality_traits_key] = personality_traits_comp
 
-    # 11. When option space is enabled and act is wrapped by self-assessment,
-    #     add base act component so it receives a logging channel for option-space
-    #     entries (Options + Chosen Index) in component_logs.json.
-    if use_option_space and enable_self_assessment:
-      components_of_agent['IMPE_Act_OptionSpace'] = base_act_component
-
     agent = entity_agent_with_logging.EntityAgentWithLogging(
         agent_name=entity_name,
         act_component=act_component,

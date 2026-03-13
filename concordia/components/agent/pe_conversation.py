@@ -40,7 +40,7 @@ class Goal:
 class Utterance:
   """A conversation utterance."""
   turn: int
-  speaker: str
+  actor: str
   text: str
   body: str = ""  # Body language description
 
@@ -92,9 +92,9 @@ class PEMemoryComponent(
     self._pe_history: list[PERecord] = []
     self._reflections: list[ReflectionRecord] = []
 
-  def add_utterance(self, turn: int, speaker: str, text: str) -> None:
+  def add_utterance(self, turn: int, actor: str, text: str) -> None:
     """Add a conversation utterance."""
-    self._conversation.append(Utterance(turn=turn, speaker=speaker, text=text))
+    self._conversation.append(Utterance(turn=turn, actor=actor, text=text))
 
   def add_pe_record(
       self, turn: int, partner_text: str, estimate: float, pe: float
@@ -155,7 +155,7 @@ class PEMemoryComponent(
     ]
     if conv_k:
       for u in conv_k:
-        lines.append(f'  [t={u.turn} {u.speaker}] {u.text}')
+        lines.append(f'  [t={u.turn} {u.actor}] {u.text}')
     else:
       lines.append('  (none)')
 
@@ -444,7 +444,7 @@ class PEActComponent(entity_component.ActingComponent):
     refl_k = memory.get_recent_reflections()
 
     def fmt_conv(u: Utterance) -> str:
-      return f'[t={u.turn} {u.speaker}] {u.text}'
+      return f'[t={u.turn} {u.actor}] {u.text}'
 
     def fmt_pe(p: PERecord) -> str:
       return (
@@ -482,7 +482,7 @@ Avoid meta-talk; speak naturally.
     current_turn = len(conv_k) + 1
     memory.add_utterance(
         turn=current_turn,
-        speaker=self.get_entity().name,
+        actor=self.get_entity().name,
         text=text,
     )
 

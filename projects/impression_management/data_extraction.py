@@ -72,7 +72,7 @@ def extract_turn_data_from_entities(
 
         # Prefer action history for actor utterance (one actor action per turn).
         actor_action = actions[idx] if idx < len(actions) else None
-        actor_utt = next((u for u in conversation if u.turn == turn and u.speaker == actor_entity.name), None)
+        actor_utt = next((u for u in conversation if u.turn == turn and u.actor == actor_entity.name), None)
 
         # Prefer sequence-aligned audience evaluation.
         eval_rec = evaluations[idx] if idx < len(evaluations) else None
@@ -129,10 +129,10 @@ def extract_turn_data_from_entities(
         turn_logs.append(TurnLog(
             time=datetime.datetime.now().isoformat(timespec='seconds') + 'Z',
             turn=turn,
-            speaker=actor_entity.name,
-            listener=audience_entity.name,
-            speaker_text=(actor_action.text if actor_action else (actor_utt.text if actor_utt else '')),
-            speaker_body=(actor_action.body if actor_action else (actor_utt.body if actor_utt else '')),
+            actor=actor_entity.name,
+            audience=audience_entity.name,
+            actor_text=(actor_action.text if actor_action else (actor_utt.text if actor_utt else '')),
+            actor_body=(actor_action.body if actor_action else (actor_utt.body if actor_utt else '')),
             audience_I=(eval_rec.I_t if eval_rec else 0.0),
             audience_text=(eval_rec.utterance.text if eval_rec else ''),
             audience_body=(eval_rec.utterance.body if eval_rec else ''),

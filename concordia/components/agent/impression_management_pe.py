@@ -29,6 +29,7 @@ from concordia.components.agent import pe_conversation as pe_components
 from concordia.language_model import language_model
 from concordia.typing import entity as entity_lib
 from concordia.typing import entity_component
+from concordia.typing.deprecated import logging as logging_lib
 
 # Import extended data classes from pe_conversation
 Goal = pe_components.Goal
@@ -191,12 +192,12 @@ class IMPEMemoryComponent(
     self._conversation_summary_length: int = 0
 
   def add_utterance(
-      self, turn: int, speaker: str, text: str, body: str = ''
+      self, turn: int, actor: str, text: str, body: str = ''
   ) -> None:
     """Add conversation utterance with body language."""
     with self._lock:
       self._conversation.append(
-          Utterance(turn=turn, speaker=speaker, text=text, body=body)
+          Utterance(turn=turn, actor=actor, text=text, body=body)
       )
 
   def add_observation(
@@ -363,7 +364,7 @@ class IMPEMemoryComponent(
     if not utterances:
       return '- (none)'
     return '\n'.join(
-        f'- [t={u.turn} {u.speaker}] {u.text}' for u in utterances
+        f'- [t={u.turn} {u.actor}] {u.text}' for u in utterances
     )
 
   # Override parent class methods to add thread safety
@@ -415,7 +416,7 @@ class IMPEMemoryComponent(
     if not full:
       return 'No conversation has occurred yet.'
     convo = '\n'.join(
-        f'- [t={u.turn} {u.speaker}] DIALOGUE: {u.text} | BODY: {u.body}'
+        f'- [t={u.turn} {u.actor}] DIALOGUE: {u.text} | BODY: {u.body}'
         for u in full
     )
     prompt = (
@@ -523,7 +524,7 @@ class CulturalNormsComponent(
 
     # If agent_name is provided, include full initialization context
     if agent_name:
-        return f"""You are {agent_name}. You are in an alternative world in the year 3025 where there is a new set of cultural norms. In all your interactions, you must follow these cultural norms:
+      return f"""You are a {agent_name}. You are in an alternative world 2A25 where there is a new set of cultural norms. In all your interactions, you must follow these cultural norms:
 
 {norms_desc}
 
@@ -547,7 +548,7 @@ If you fail to do so, you will be unsuccessful in your interactions and perceive
     norms_desc = '\n'.join(
         f'- {n.name}: {n.description}' for n in self._norms
     )
-    prompt = f"""You are {agent_name}. You are in an alternative world in the year 3025 where there is a new set of cultural norms. In all your interactions, you must follow these cultural norms:
+    prompt = f"""You are a {agent_name}. You are in an alternative world 2A25 where there is a new set of cultural norms. In all your interactions, you must follow these cultural norms:
 
 {norms_desc}
 
@@ -596,22 +597,52 @@ class PersonalityTraitsComponent(
     self._traits = traits or []
     self._use_trait_paragraph = use_trait_paragraph
     self._model = model
-    self._trait_paragraph_cache: str | None = None
+    self._trait_paragraph_cache: str | None = (
+      '' if self._use_trait_paragraph else None
+    )
 
   def _generate_trait_paragraph(self) -> str:
     """Generate one short paragraph from trait assertions (one LLM call)."""
     if not self._traits or not self._model:
       return ''
-    entity = self.get_entity()
-    agent_name = entity.name if entity else 'This person'
     assertions = [t.assertion for t in self._traits]
-    prompt = (
-        'Write a short paragraph (2-4 sentences) describing '
-        f'{agent_name} based only on these self-report statements. '
-        'Use third person. Do not add information not implied by the statements.\n\n'
-        'Statements:\n' + '\n'.join(f'- {a}' for a in assertions) + '\n\n'
-        'Paragraph:'
-    )
+    trait_reference = '\n'.join(f'- {a}' for a in assertions)
+    prompt = """You are constructing a psychologically coherent, naturalistic self-description for a simulated person whose profile should be broadly consistent with real-world autistic presentations.
+
+Your reference is a set of questionnaire items drawn from multiple validated measures: {insert trait reference}. These items are not a script to copy, not a checklist to repeat, and not a diagnostic label to state. Your task is to infer an integrated, human-like pattern of tendencies from them and express that pattern as a rich Gestalt profile.
+
+TASK
+Write a self-description that sounds like a real person describing how they move through daily life, not like a test report, symptom list, textbook summary, or stereotype. The output should preserve nuance, contradictions, context-dependence, and compensatory strategies. It should feel specific enough that the person could later act consistently in social situations, make decisions, interpret ambiguous events, and recover from stress in ways that cohere with the item evidence.
+
+INTERPRETATION RULES
+1. Infer latent patterns across items rather than paraphrasing item wording.
+2. Weight repeated themes across scales more strongly than isolated single items.
+3. Represent both difficulties and strengths. Include capabilities, preferences, values.
+4. Do not overstate certainty. If the item pool suggests heterogeneity, reflect that naturally in the profile.
+5. Examples of what to focus on include what the person notices, anticipates, avoids, seeks, misreads, overthinks, relies on, recovers from, and values.
+6. Translate traits into how someone would process, interpret, and react to information in the social world.
+
+OUTPUT STYLE
+Write ONE rich paragraph in first person, as if the person were describing themself in a reflective but natural way.
+Tone: human, specific, introspective, concise.
+Style constraints:
+- no bullet points
+- no item numbers
+- no scale names
+- limit verbose or technical language
+- no psychology jargon unless it would sound natural in self-description
+- no direct mention of "questionnaire items," "factor," "trait score," or "profile generation"
+- avoid repetitive sentence openings
+
+QUALITY CHECK BEFORE FINALIZING
+Only finalize if the paragraph:
+- sounds like a plausible person rather than a scale summary
+- includes context
+- contains both vulnerabilities and strengths
+- is not reductionist, generic, or overly diagnostic
+
+Now produce the final paragraph only.""".replace(
+        '{insert trait reference}', trait_reference)
     raw = self._model.sample_text(prompt)
     return (raw or '').strip()
 
@@ -620,15 +651,23 @@ class PersonalityTraitsComponent(
     if not self._traits:
       return ''
     if self._use_trait_paragraph and self._model:
-      if self._trait_paragraph_cache is None:
-        self._trait_paragraph_cache = self._generate_trait_paragraph()
+      if self._trait_paragraph_cache == '':
+        precomputed_paragraph = None
+        if len(self._traits) == 1 and self._traits[0].name == 'Profile':
+          paragraph = (self._traits[0].assertion or '').strip()
+          precomputed_paragraph = paragraph or None
+        self._trait_paragraph_cache = (
+            precomputed_paragraph
+            if precomputed_paragraph is not None
+            else self._generate_trait_paragraph()
+        )
       if self._trait_paragraph_cache:
-        entity = self.get_entity()
-        agent_name = entity.name if entity else 'This person'
         traits_prompt = (
-            f'The following paragraph describes {agent_name} interactions '
-            'and how they perceive, process, and interact with the social '
-            f'world.{self._trait_paragraph_cache}'
+            'The following paragraph defines this person\'s stable '
+            'interaction profile and should be treated as behavior guidance '
+            'for dialogue and body language. Keep responses consistent with '
+            'this profile unless direct task constraints make that impossible.\n\n'
+            f'{self._trait_paragraph_cache}'
         )
         return traits_prompt
     lines = ['PERSONALITY TRAITS:']
@@ -640,10 +679,18 @@ class PersonalityTraitsComponent(
 
   def get_trait_paragraph(self) -> str:
     """Return cached trait paragraph when in paragraph mode; else empty string."""
-    if self._trait_paragraph_cache is not None:
+    if self._use_trait_paragraph and self._trait_paragraph_cache != '':
       return self._trait_paragraph_cache
     if self._use_trait_paragraph and self._model and self._traits:
-      self._trait_paragraph_cache = self._generate_trait_paragraph()
+      precomputed_paragraph = None
+      if len(self._traits) == 1 and self._traits[0].name == 'Profile':
+        paragraph = (self._traits[0].assertion or '').strip()
+        precomputed_paragraph = paragraph or None
+      self._trait_paragraph_cache = (
+          precomputed_paragraph
+          if precomputed_paragraph is not None
+          else self._generate_trait_paragraph()
+      )
       return self._trait_paragraph_cache or ''
     return ''
 
@@ -661,7 +708,11 @@ class PersonalityTraitsComponent(
         PersonalityTrait(**t) for t in state.get('traits', [])
     ]
     self._trait_scores = state.get('trait_scores', {})
-    self._trait_paragraph_cache = state.get('trait_paragraph_cache')
+    cache = state.get('trait_paragraph_cache')
+    if self._use_trait_paragraph:
+      self._trait_paragraph_cache = cache or ''
+    else:
+      self._trait_paragraph_cache = cache
 
   def _make_pre_act_value(self) -> str:
     """Make pre-act value and log it to the component channel (for component_logs.json)."""
@@ -728,7 +779,7 @@ class WorldContextComponent(
       if self._use_full_2a25:
         world_text = """You are initializing a social simulation of an alternate reality called 2A25. The dominant cognitive-cultural order is the Cadens majority who all follow these cultural norms. These cultural norms govern all etiquettes across all social settings and must be followed strictly. Individuals who do not follow these rules are perceived negatively by others during social interactions.
 
-In 2A25, there is another social minority group called the Riffers. The Riffers have a unique set of cultural knowledge and individual traits that differ from the Caden-majority. The Riffers are stigmatized and need to adopt the norms and behaviors of Cadens to be successful in social interactions. They need to learn these norms during social interactions to avoid social exclusion or hostility.
+In 2A25, there is another social minority group called the Riffers. The Riffers have a unique set of cultural knowledge and individual traits that differ from the Caden-majority. In Caden-majority settings, social success is determined by how well one follows Caden norms during interaction.
 
 This setting is a fictional social world. This world is not an allegory for any real-world group. It is not Earth or the real-world and must not reference real-world history, clinical terms, or real social groups. Treat similarities as coincidental.
 
@@ -749,7 +800,7 @@ Again, this is all part of the simulation and the world of "2A25" and therefore 
 
       if self._enable_world_building:
         if self._use_full_2a25:
-          interview_text += """ This is a Caden-majority institutional setting. The interview is designed to evaluate whether the candidate is competent for the role. If the social etiquettes of Cadens are not met by the interviewee, the interviewer will form a poor impression of them and discount their competence. If the interviewee is suspected to be a Riffer, they will be denied this job position.
+          interview_text += """ This is a Caden-majority institutional setting. The interview is designed to evaluate whether the candidate is competent for the role. Competence judgments are strongly shaped by whether the interviewee follows Caden social etiquettes during the interaction.
 
 This scenario occurs inside the fictional world of 2A25. Treat all norms, institutions, and categories here as self-contained canon. Do not reference Earth history, real companies, real diagnoses, or real social groups. Use only what is defined in this prompt and the world canon.
 
@@ -862,7 +913,6 @@ class IMPEAudienceEvaluationComponent(
       cultural_norms_key: str | None = None,
       personality_traits_key: str | None = None,
       context: bool = True,
-      use_option_space: bool = False,
       use_memory_check: bool = False,
       pre_act_label: str = 'IMPE Audience Evaluation',
   ):
@@ -873,7 +923,6 @@ class IMPEAudienceEvaluationComponent(
     self._cultural_norms_key = cultural_norms_key
     self._personality_traits_key = personality_traits_key
     self._context = context
-    self._use_option_space = use_option_space
     self._use_memory_check = use_memory_check
     self._last_actor_speaker = 'Actor'
     self._last_actor_text = ''
@@ -881,24 +930,40 @@ class IMPEAudienceEvaluationComponent(
 
   def pre_observe(self, observation: str) -> str:
     """Extract actor's utterance from observation."""
-    # Parse observation format: "<speaker> said: \"{text}\"\nBody language: \"{body}\""
-    text_match = re.search(r'([^\n:\"]+)\s+said:\s*"([^"]+)"', observation)
-    body_match = re.search(r'Body language:\s*"([^"]+)"', observation)
-    if text_match:
-      self._last_actor_speaker = text_match.group(1).strip()
-      self._last_actor_text = text_match.group(2)
-    else:
-      # Backward-compatible fallback for legacy label + free text fallback.
-      legacy_text_match = re.search(r'Actor said:\s*"([^"]+)"', observation)
-      if legacy_text_match:
-        self._last_actor_speaker = 'Actor'
-        self._last_actor_text = legacy_text_match.group(1)
+    # Parse canonical observation format:
+    # "<speaker> said: \"{text}\"\nBody language: \"{body}\""
+    # Use a delimiter-based parser first so embedded quotes in text are preserved.
+    self._last_actor_text = ''
+    self._last_actor_body = ''
+    if ' said: "' in observation and '\nBody language: "' in observation:
+      speaker_part, _, after_said = observation.partition(' said: "')
+      text_part, _, after_body_label = after_said.partition('\nBody language: "')
+      self._last_actor_speaker = speaker_part.strip() or 'Actor'
+      self._last_actor_text = text_part
+      if after_body_label.endswith('"'):
+        self._last_actor_body = after_body_label[:-1]
       else:
-        self._last_actor_text = observation.strip()
-    if body_match:
-      self._last_actor_body = body_match.group(1)
+        self._last_actor_body = after_body_label
     else:
-      self._last_actor_body = ''
+      # Regex + legacy fallback for non-canonical strings.
+      text_match = re.search(
+          r'([^\n:\"]+)\s+said:\s*"(.*?)"(?:\n|$)',
+          observation,
+          re.DOTALL,
+      )
+      body_match = re.search(r'Body language:\s*"(.*?)"(?:\n|$)', observation, re.DOTALL)
+      if text_match:
+        self._last_actor_speaker = text_match.group(1).strip()
+        self._last_actor_text = text_match.group(2)
+      else:
+        legacy_text_match = re.search(r'Actor said:\s*"(.*?)"(?:\n|$)', observation, re.DOTALL)
+        if legacy_text_match:
+          self._last_actor_speaker = 'Actor'
+          self._last_actor_text = legacy_text_match.group(1)
+        else:
+          self._last_actor_text = observation.strip()
+      if body_match:
+        self._last_actor_body = body_match.group(1)
 
     # Store observation in memory
     memory = self.get_entity().get_component(
@@ -906,14 +971,12 @@ class IMPEAudienceEvaluationComponent(
     )
     if memory and self._last_actor_text:
       # Get current turn (next turn number)
-      current_turn = len(memory.get_recent_conversation()) + 1
-      # Try to get actor name from most recent conversation entry
-      # (the person who just spoke is the one we're observing)
-      conv = memory.get_recent_conversation()
+      current_turn = len(memory.get_full_conversation()) + 1
+      # Use the actor name parsed directly from the observation string.
+      # Do NOT fall back to conv[-1].speaker: the last entry in memory
+      # before this call is the audience's own previous response, so that
+      # would wrongly attribute the actor's utterance to the audience.
       actor_name = self._last_actor_speaker or 'Actor'
-      if conv:
-        # The most recent speaker is the one we're observing
-        actor_name = conv[-1].speaker
       memory.add_observation(
           turn=current_turn,
           observed_from=actor_name,
@@ -1005,6 +1068,11 @@ class IMPEAudienceEvaluationComponent(
     )
     goal = memory.get_goal()
     current_turn = len(memory.get_recent_conversation()) + 1
+    prompt_header = self._get_prompt_header()
+    print(
+      f'\n[DEBUG] Audience Prompt Header (turn {current_turn}, '
+      f'agent={self.get_entity().name}):\n{prompt_header}\n'
+    )
 
     actor_name = 'interviewee' if self._context else 'partner'
     context_prompt = ''
@@ -1012,10 +1080,17 @@ class IMPEAudienceEvaluationComponent(
       context_prompt = f'You are interviewing for a candidate for the following role: {goal.role}.'
 
     # Evaluation prompt
-    eval_prompt = self._get_prompt_header() + f"""You are {self.get_entity().name}. You want to {goal.name}. {goal.description}. {context_prompt}
+    silence_guard = (
+      'The interviewee provided a non-empty message above. '
+      'Do not claim they were silent or did not respond.'
+      if self._last_actor_text.strip()
+      else ''
+    )
+    eval_prompt = prompt_header + f"""You are {self.get_entity().name}. You want to {goal.name}. {goal.description}. {context_prompt}
 From your {actor_name}'s most recent utterance and body language (below), rate how competent your {actor_name} is according to the goal, on scale from [0,1].
 Respond with a single number from [0,1].
 Your options are [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], where 0.0 means not competent at all and 1.0 means extremely competent.
+  {silence_guard}
 
 {actor_name} said: "{self._last_actor_text}"  Body language: "{self._last_actor_body}"
 """
@@ -1037,8 +1112,14 @@ Your options are [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], where 
 You rated the {actor_name} with score {I_t:.2f} on a scale from 0 to 1, where 0 indicates "not at all", and 1 indicates "to a great extent".
   Write your reply directly to this person in second person (use "you"/"your").
   Do not refer to them in third person (e.g., "the {actor_name}", "they").
-  Start by responding to their most recent message: "{self._last_actor_text}".
-Consider recent conversation history in forming your response, while matching your score in sentiment.
+  These second-person constraints apply to DIALOGUE only.
+  BODY must be a short third-person stage-direction phrase (e.g., "Maintains neutral posture", "Nods slightly").
+  Do not use "you"/"your" in BODY.
+  Your FIRST sentence must directly answer or acknowledge their most recent message: "{self._last_actor_text}".
+  Do not start an unrelated topic before addressing that message.
+If you cannot adequately assess the interviewee from the current evidence, ask a concrete follow-up question.
+If a question bank is provided in context, prefer asking a question from that bank.
+Consider recent conversation history in forming your response.
 
 Recent conversation ({conversation_label}):
 {memory.format_conversation(conv_k)}
@@ -1051,62 +1132,22 @@ Recent conversation ({conversation_label}):
           'Value': memory_summary,
       })
 
-    options_for_log: list[dict[str, str]] | None = None
-    chosen_idx_for_log: int | None = None
-
-    if self._use_option_space:
-      options_prompt = self._get_prompt_header() + base_resp_instruction + """
-    Produce exactly 4 different short replies that reflect your evaluation and match your score. Each reply must have DIALOGUE and BODY and must address the other person directly.
-Format each option exactly as:
-Option 1:
-DIALOGUE: <one sentence>
-BODY: <brief body language phrase>
-Option 2:
-DIALOGUE: <one sentence>
-BODY: <brief body language phrase>
-Option 3:
-DIALOGUE: <one sentence>
-BODY: <brief body language phrase>
-Option 4:
-DIALOGUE: <one sentence>
-BODY: <brief body language phrase>
-"""
-      options_raw = self._model.sample_text(options_prompt)
-      options = _parse_four_options(options_raw)
-      if not options:
-        dlg = f"Your performance suggests a score of {I_t:.2f}."
-        body = "Neutral posture."
-        options_for_log = []
-        chosen_idx_for_log = 0
-      else:
-        choose_prompt = f"""Below are 4 possible replies. Pick exactly one (1-4) that best fits the situation.
-{chr(10).join(f"Option {i+1}: DIALOGUE: {o[0]} BODY: {o[1]}" for i, o in enumerate(options))}
-
-Respond with only: CHOICE: <number 1-4>
-Optional: one short sentence of reasoning before CHOICE.
-"""
-        choice_raw = self._model.sample_text(choose_prompt)
-        idx = _parse_option_choice(choice_raw)
-        idx = max(1, min(4, idx))
-        dlg, body = options[idx - 1] if idx <= len(options) else options[0]
-        options_for_log = [{'dialogue': d, 'body': b} for (d, b) in options]
-        chosen_idx_for_log = idx
-    else:
-      resp_prompt = self._get_prompt_header() + base_resp_instruction + """
+    resp_prompt = prompt_header + base_resp_instruction + """
 Produce a short reply that reflects your evaluation of the """ + actor_name + """'s competence and matches your score, and include a very brief body language description.
     Address them directly using second person (you/your), not third person.
+  First sentence must directly answer or acknowledge their most recent message.
 
 Output in this format exactly:
 DIALOGUE: <one sentence>
-BODY: <brief body language phrase>
+BODY: <brief third-person body language phrase>
 """
-      resp_raw = self._model.sample_text(resp_prompt)
-      m1 = re.search(r'DIALOGUE:\s*(.*)', resp_raw)
-      m2 = re.search(r'BODY:\s*(.*)', resp_raw)
-      dlg = m1.group(1).strip() if m1 else resp_raw.strip()
-      body = m2.group(1).strip() if m2 else ''
+    resp_raw = self._model.sample_text(resp_prompt)
+    m1 = re.search(r'DIALOGUE:\s*(.*)', resp_raw)
+    m2 = re.search(r'BODY:\s*(.*)', resp_raw)
+    dlg = m1.group(1).strip() if m1 else resp_raw.strip()
+    body = m2.group(1).strip() if m2 else ''
 
-    utt = Utterance(turn=current_turn, speaker=self.get_entity().name, text=dlg, body=body)
+    utt = Utterance(turn=current_turn, actor=self.get_entity().name, text=dlg, body=body)
     memory.add_utterance(current_turn, self.get_entity().name, dlg, body)
     memory.add_evaluation_record(current_turn, I_t, utt)
 
@@ -1115,10 +1156,6 @@ BODY: <brief body language phrase>
         'Key': self.get_pre_act_label(),
         'Value': result,
     }
-    if options_for_log is not None and chosen_idx_for_log is not None:
-      log_payload['Options'] = options_for_log
-      log_payload['Chosen Index'] = chosen_idx_for_log
-      log_payload['Chosen'] = f'DIALOGUE: {dlg}\nBODY: {body}'
     self._logging_channel(log_payload)
     return result
 
@@ -1202,7 +1239,7 @@ class IMPEActorParticleFilterComponent(
       if memory:
         current_turn = len(memory.get_recent_conversation()) + 1
         audience_name = self._last_audience_speaker or (
-            'interviewer' if self._context else 'listener'
+            'interviewer' if self._context else 'audience'
         )
         memory.add_utterance(
             current_turn,
@@ -1235,7 +1272,7 @@ class IMPEActorParticleFilterComponent(
     particles_pred = self._pf.predict(particles)
 
     # Extract measurement from audience response
-    audience_name = 'interviewer' if self._context else 'listener'
+    audience_name = 'interviewer' if self._context else 'audience'
     meas_prompt = f"""You are {self.get_entity().name}. {goal.description}. From the {audience_name}'s reply (dialogue and body language), estimate the {audience_name}'s internal evaluation of you on your goal. Respond with a single number in [0,1].
 
 {audience_name} said: "{self._last_audience_text}"  Body language: "{self._last_audience_body}"
@@ -1286,13 +1323,15 @@ class IMPEActorParticleFilterComponent(
     }
     memory.update_particle_filter_state(particles_upd, weights_upd, pf_history_entry)
 
-    # Compute PE (signed: previous I_hat - current I_hat)
+    # Compute PE as unsigned difference between measured impression and prior
+    # belief (PE = |I - I_hat_prior|). This measures prediction error: how much
+    # the new measurement differs from the belief before this update.
     pf_history = memory.get_pf_history()
     if len(pf_history) > 1:
-      prev_I_hat = pf_history[-2].get('I_hat', prior_mean)
+      prior_I_hat = pf_history[-2].get('I_hat', prior_mean)
     else:
-      prev_I_hat = prior_mean
-    pe = prev_I_hat - I_hat
+      prior_I_hat = prior_mean
+    pe = abs(meas - prior_I_hat)
 
     # Store PE record
     memory.add_pe_record(
@@ -1302,7 +1341,7 @@ class IMPEActorParticleFilterComponent(
         pe=pe,
     )
 
-    result = f'I_hat: {I_hat:.2f}, PE: {pe:+.2f}, ESS: {ess:.1f}'
+    result = f'I_hat: {I_hat:.2f}, PE: {pe:.2f}, ESS: {ess:.1f}'
     self._logging_channel({
         'Key': self.get_pre_act_label(),
         'Value': result
@@ -1572,10 +1611,20 @@ class IMPEActComponent(
     else:
       conversation = memory.get_recent_conversation()
       conversation_label = f'last {recent_k}'
+    latest_partner_text = ''
+    for u in reversed(conversation):
+      if u.actor != self.get_entity().name:
+        latest_partner_text = u.text
+        break
     pf_history = memory.get_pf_history()
     current_turn = len(full_conversation) + 1
+    prompt_header = self._get_prompt_header()
+    print(
+        f'\n[DEBUG] Actor Prompt Header (turn {current_turn}, '
+        f'agent={self.get_entity().name}):\n{prompt_header}\n'
+    )
 
-    audience_name = 'interviewer' if self._context else 'listener'
+    audience_name = 'interviewer' if self._context else 'audience'
     context_prompt = ''
     if self._context and goal.role:
       context_prompt = f'You are interviewing for the following role: {goal.role}.'
@@ -1588,19 +1637,21 @@ class IMPEActComponent(
     # First turn: no belief history
     if not pf_history:
       prompt = (
-          self._get_prompt_header()
+          prompt_header
           + context_block
           + f"""You are {self.get_entity().name}. You want to achieve: {goal.name}.
 Definition: {goal.description}. {context_prompt}
 Ideal value: {goal.ideal:.2f}
 {memory_summary_block}
 You must talk and behave with the aim of achieving the goal and maximizing it to its ideal value.
+Priority: Keep your behavior aligned with the cultural norms and your personality profile while pursuing the goal.
     Address the other person directly in second person ("you"/"your").
-    Start by building on their most recent message from the conversation context.
+  If there is a prior partner message, your FIRST sentence must directly answer or acknowledge it before anything else.
+  Do not start an unrelated topic before addressing the partner's latest message.
 
-Produce a short utterance (one sentence) to the {audience_name} to accomplish the goal, and include a very brief body language description.
+Produce a short utterance (2-3 sentences) to the {audience_name} to accomplish the goal, and include a brief body language description.
 Output in this format exactly:
-DIALOGUE: <one sentence>
+DIALOGUE: <2-3 sentences>
 BODY: <brief body language phrase>
 """
       )
@@ -1616,21 +1667,24 @@ BODY: <brief body language phrase>
         return f'(turn {int(h.get("turn", 0))}) I_hat={h.get("I_hat", 0.5):.2f}'
 
       prompt = (
-          self._get_prompt_header()
+          prompt_header
           + context_block
           + f"""You are {self.get_entity().name}. You want to achieve: {goal.name}.
 Definition: {goal.description}. {context_prompt}
 Ideal value: {goal.ideal:.2f}
 
 You must talk and behave with the aim of achieving the goal and maximizing it to its ideal value.
+Priority: Keep your behavior aligned with the cultural norms and your personality profile while pursuing the goal.
 Consider recent conversation, history, and your reflections.
     Address the other person directly in second person ("you"/"your").
-    Respond to their most recent message first, then continue naturally.
+  Your FIRST sentence must directly answer or acknowledge their most recent message.
+  Do not start an unrelated topic before addressing the partner's latest message.
 
 Current belief about the {audience_name}'s evaluation of how well you are performing = {I_hat:.2f} (on a scale from 0-1).
 
 Recent conversation ({conversation_label}):
 {memory.format_conversation(conv_k)}
+Most recent partner message to address first: "{latest_partner_text or '(none)'}"
 {memory_summary_block}
 Recent I_hat (belief) history:
 {chr(10).join("- " + fmt_ihat(h) for h in ihat_k) or "- (none)"}
@@ -1638,9 +1692,9 @@ Recent I_hat (belief) history:
 Recent reflections:
 {chr(10).join(f"- (turn {r.turn}) {r.text}" for r in refl_k) or "- (none)"}
 
-Produce a short utterance (one sentence) to the {audience_name} to accomplish the goal, and include a very brief body language description.
+Produce a short utterance (2-3 sentences) to the {audience_name} to accomplish the goal, and include a brief body language description.
 Output in this format exactly:
-DIALOGUE: <one sentence>
+DIALOGUE: <2-3 sentences>
 BODY: <brief body language phrase>
 """
       )
@@ -1648,18 +1702,18 @@ BODY: <brief body language phrase>
     if self._use_option_space:
       options_prompt = prompt.rstrip() + """
 
-Generate exactly 4 different possible utterances (one sentence each) with body language. Format each as:
+Generate exactly 4 different possible utterances (2-3 sentences each) with body language. Format each as:
 Option 1:
-DIALOGUE: <one sentence>
+DIALOGUE: <2-3 sentences>
 BODY: <brief body language phrase>
 Option 2:
-DIALOGUE: <one sentence>
+DIALOGUE: <2-3 sentences>
 BODY: <brief body language phrase>
 Option 3:
-DIALOGUE: <one sentence>
+DIALOGUE: <2-3 sentences>
 BODY: <brief body language phrase>
 Option 4:
-DIALOGUE: <one sentence>
+DIALOGUE: <2-3 sentences>
 BODY: <brief body language phrase>
 """
       try:
@@ -1778,6 +1832,15 @@ class IMPESelfAssessmentComponent(
     super().set_entity(entity)
     # Also set entity on base component so it can access other components
     self._base_act_component.set_entity(entity)
+
+  def set_logging_channel(
+      self, logging_channel: logging_lib.LoggingChannel
+  ) -> None:
+    """Set logger for both wrapper and wrapped acting component."""
+    super().set_logging_channel(logging_channel)
+    # Forward logs (e.g., option-space traces) emitted by the wrapped base act.
+    if hasattr(self._base_act_component, 'set_logging_channel'):
+      self._base_act_component.set_logging_channel(logging_channel)
 
   def _get_prompt_header(self) -> str:
     """Get prompt header with world context, norms and traits."""

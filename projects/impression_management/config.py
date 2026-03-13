@@ -66,9 +66,8 @@ def parse_arguments() -> ConversationConfig:
         choices=constants.TRAIT_MODE_CHOICES,
         help=(
             'Trait initialization mode: '
-            'audience_only (audience traits paragraph only), '
-            'actor_only (actor traits paragraph only), '
-            'both (both traits paragraphs).'
+            'none (no traits for either agent), '
+            'actor_only (only actor has traits paragraph).'
         ),
     )
     parser.add_argument(
@@ -113,6 +112,32 @@ def parse_arguments() -> ConversationConfig:
         default='llama3.1:8b',
         help='Local model name (for Ollama).',
     )
+    parser.add_argument(
+        '--use_memory_check',
+        action='store_true',
+        help='Inject LLM-generated full-conversation summary into prompts (1 extra LLM call per turn).',
+    )
+    parser.add_argument(
+        '--enable_self_assessment',
+        action='store_true',
+        help='Wrap actor act component with self-assessment and optional revision.',
+    )
+    parser.add_argument(
+        '--consistency_threshold',
+        type=float,
+        default=0.7,
+        help='Minimum consistency score (0-1) to accept actor response without revision.',
+    )
+    parser.add_argument(
+        '--disable_revision',
+        action='store_true',
+        help='Disable revision of inconsistent actor responses (only log assessments).',
+    )
+    parser.add_argument(
+        '--save_component_logs',
+        action='store_true',
+        help='Save component-level logs to component_logs.json in output directory.',
+    )
     args = parser.parse_args()
 
     # Create output directory
@@ -135,6 +160,11 @@ def parse_arguments() -> ConversationConfig:
         audience_traits_spreadsheet=AUDIENCE_TRAITS_SPREADSHEET,
         llm_type=args.llm_type,
         local_model=args.local_model,
+        use_memory_check=args.use_memory_check,
+        enable_self_assessment=args.enable_self_assessment,
+        consistency_threshold=args.consistency_threshold,
+        disable_revision=args.disable_revision,
+        save_component_logs=args.save_component_logs,
     )
 
 

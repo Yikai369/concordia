@@ -13,6 +13,12 @@ import pandas as pd
 from projects.impression_management import constants
 from projects.impression_management.config import ConversationConfig
 
+TEMP_ACTOR_TRAITS_PARAGRAPH = """This person navigates the social world with ease and adaptability, comfortably engaging with others and adjusting their behavior across a wide range of social situations. Rather than relying heavily on routines, they thrive in dynamic environments where expectations may shift and interactions are spontaneous. They naturally focus on the broader context of situations, easily grasping overarching concepts while still recalling relevant details when needed. Social interactions tend to feel intuitive and energizing. Reading non-verbal cues, understanding implied meanings, and participating in spontaneous conversations happen with little conscious effort.
+
+They often enjoy social activities and feel comfortable in environments with varying levels of stimulation, adapting smoothly to busy gatherings or unfamiliar settings. Instead of relying primarily on logic or rehearsed scripts, they communicate fluidly and express themselves naturally in conversation. Their communication style is generally flexible and nuanced, allowing them to interpret subtleties in language and avoid common misunderstandings. They are able to express empathy and fairness openly, and these feelings are usually conveyed clearly to others.
+
+Their interests tend to be diverse and socially integrated rather than intensely focused on narrow topics, helping them connect easily with different groups of people. Because their behavior aligns closely with common social expectations, forming relationships and integrating into social environments usually happens naturally. While they still value personal interests and individuality, they are comfortable balancing these with the social rhythms and spontaneity of everyday interactions."""
+
 
 def extract_traits_from_spreadsheet(
     file_path: str,
@@ -72,15 +78,12 @@ def prepare_traits_and_norms(
     """Prepare cultural norms and trait enablement for actor/audience."""
     cultural_norms = None if config.no_audience_norms else constants.ALL_CULTURAL_NORMS
 
-    if config.trait_mode == constants.TRAIT_MODE_AUDIENCE_ONLY:
-        actor_has_traits = False
-        audience_has_traits = True
-    elif config.trait_mode == constants.TRAIT_MODE_ACTOR_ONLY:
+    if config.trait_mode == constants.TRAIT_MODE_ACTOR_ONLY:
         actor_has_traits = True
         audience_has_traits = False
-    else:
-        actor_has_traits = True
-        audience_has_traits = True
+    else:  # TRAIT_MODE_NONE
+        actor_has_traits = False
+        audience_has_traits = False
 
     return cultural_norms, actor_has_traits, audience_has_traits
 
@@ -119,9 +122,12 @@ def create_entities(
     all_traits = extract_traits_from_spreadsheet(config.audience_traits_spreadsheet)
 
     actor_traits_paragraph = (
-        _traits_to_paragraph(model, config.actor_name, all_traits)
+        TEMP_ACTOR_TRAITS_PARAGRAPH
         if actor_has_traits else None
     )
+    if actor_traits_paragraph:
+        print('\nActor traits paragraph:')
+        print(actor_traits_paragraph)
     audience_traits_paragraph = (
         _traits_to_paragraph(model, config.audience_name, all_traits)
         if audience_has_traits else None
@@ -145,6 +151,10 @@ def create_entities(
         'enable_world_building': True,
         'enable_interview_context': True,
         'use_full_2a25_world': True,
+        'use_memory_check': config.use_memory_check,
+        'enable_self_assessment': config.enable_self_assessment,
+        'consistency_threshold': config.consistency_threshold,
+        'disable_revision': config.disable_revision,
     }
 
     # Create audience prefab
@@ -162,6 +172,7 @@ def create_entities(
         'enable_world_building': True,
         'enable_interview_context': True,
         'use_full_2a25_world': True,
+        'use_memory_check': config.use_memory_check,
     }
 
     # Build entities

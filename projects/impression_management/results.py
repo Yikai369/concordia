@@ -7,6 +7,49 @@ from projects.impression_management.config import ConversationConfig
 from projects.impression_management.models import TurnLog
 
 
+def save_component_logs(entities: list[object], save_dir: str) -> str | None:
+    """Save component-level logs from entities to JSON file."""
+    component_logs = {}
+    has_logs = False
+
+    for entity in entities:
+        if not hasattr(entity, 'get_all_logs'):
+            continue
+
+        logs = entity.get_all_logs()
+        if not logs:
+            continue
+
+        has_logs = True
+        serializable_logs = {}
+        for channel, entries in logs.items():
+            serializable_entries = []
+            for entry in entries:
+                if isinstance(entry, (str, int, float, bool, type(None))):
+                    serializable_entries.append(entry)
+                elif isinstance(entry, (dict, list)):
+                    serializable_entries.append(entry)
+                else:
+                    serializable_entries.append(str(entry))
+            serializable_logs[channel] = serializable_entries
+
+        component_logs[entity.name] = {
+            'channels': serializable_logs,
+            'channel_count': len(serializable_logs),
+            'total_entries': sum(len(entries) for entries in serializable_logs.values()),
+        }
+
+    if not has_logs:
+        return None
+
+    log_file = os.path.join(save_dir, 'component_logs.json')
+    with open(log_file, 'w', encoding='utf-8') as f:
+        json.dump(component_logs, f, indent=2, ensure_ascii=False)
+
+    print(f"[OK] Saved component logs to {log_file}")
+    return log_file
+
+
 def save_results(
     config: ConversationConfig,
     turn_logs: list[TurnLog],

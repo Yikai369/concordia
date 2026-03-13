@@ -8,10 +8,10 @@ class TurnLog:
     """Log entry for a single turn."""
     time: str
     turn: int
-    speaker: str
-    listener: str
-    speaker_text: str
-    speaker_body: str
+    actor: str
+    audience: str
+    actor_text: str
+    actor_body: str
     audience_I: float  # I_t (true hidden state)
     audience_text: str
     audience_body: str
@@ -48,3 +48,8 @@ class ConversationConfig:
     audience_traits_spreadsheet: str | None
     llm_type: str
     local_model: str
+    use_memory_check: bool = False
+    enable_self_assessment: bool = False
+    consistency_threshold: float = 0.7
+    disable_revision: bool = False
+    save_component_logs: bool = False
