@@ -77,8 +77,10 @@ This guide lists all command-line arguments for the standard impression manageme
 |----------|------|---------|-------------|
 | `--no_instructions` | flag | False | Disable Instructions component (role-playing context). |
 | `--no_self_perception` | flag | False | Disable SelfPerception ("who am I?"). |
-| `--enable_situation_perception` | flag | False | Enable SituationPerception ("what situation am I in?"). |
-| `--enable_person_by_situation` | flag | False | Enable PersonBySituation ("what would I do?"). Requires `--enable_situation_perception`. |
+| `--enable_situation_perception` | flag | **True** | Enable SituationPerception ("what situation am I in?"). Use `--no_situation_perception` to disable. |
+| `--enable_person_by_situation` | flag | **True** | Enable PersonBySituation ("what would I do?"). Requires `--enable_situation_perception`. Use `--no_person_by_situation` to disable. |
+| `--no_situation_perception` | flag | False | Disable SituationPerception (overrides default). |
+| `--no_person_by_situation` | flag | False | Disable PersonBySituation (overrides default). |
 | `--no_world_building` | flag | False | Disable 2A25 world-building (Cadens/Riffers narrative). |
 | `--no_interview_context` | flag | False | Disable interview-specific context in world-building. |
 | `--no_full_2a25` | flag | False | Use minimal generic world text instead of full 2A25 narrative. |
@@ -89,8 +91,9 @@ This guide lists all command-line arguments for the standard impression manageme
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `--enable_self_assessment` | flag | False | Enable self-assessment (consistency check and optional revision). |
+| `--enable_self_assessment` | flag | **True** | Enable self-assessment (consistency check and optional revision). Use `--no_self_assessment` to disable. |
 | `--consistency_threshold` | float | `0.7` | Minimum consistency score (0–1) to accept without revision. |
+| `--no_self_assessment` | flag | False | Disable self-assessment (overrides default). |
 | `--disable_revision` | flag | False | Disable revision of inconsistent responses; only log assessments. |
 
 ---

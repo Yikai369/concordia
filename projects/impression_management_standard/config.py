@@ -143,13 +143,13 @@ def parse_arguments() -> ConversationConfig:
     parser.add_argument(
         '--enable_self_assessment',
         action='store_true',
-        help='Enable self-assessment component (ensures responses align with traits, norms, and goals).',
+        default=True,
+        help='Enable self-assessment component (ensures responses align with traits, norms, and goals). Default: True.',
     )
     parser.add_argument(
-        '--consistency_threshold',
-        type=float,
-        default=0.7,
-        help='Minimum consistency score (0-1) to accept response without revision (default: 0.7).',
+        '--no_self_assessment',
+        action='store_true',
+        help='Disable self-assessment (overrides default).',
     )
     parser.add_argument(
         '--disable_revision',
@@ -169,12 +169,24 @@ def parse_arguments() -> ConversationConfig:
     parser.add_argument(
         '--enable_situation_perception',
         action='store_true',
-        help='Enable SituationPerception component ("what situation am I in?" questions).',
+        default=True,
+        help='Enable SituationPerception component ("what situation am I in?" questions). Default: True.',
+    )
+    parser.add_argument(
+        '--no_situation_perception',
+        action='store_true',
+        help='Disable SituationPerception (overrides default).',
     )
     parser.add_argument(
         '--enable_person_by_situation',
         action='store_true',
-        help='Enable PersonBySituation component ("what would I do?" reasoning). Requires --enable_situation_perception.',
+        default=True,
+        help='Enable PersonBySituation component ("what would I do?" reasoning). Requires --enable_situation_perception. Default: True.',
+    )
+    parser.add_argument(
+        '--no_person_by_situation',
+        action='store_true',
+        help='Disable PersonBySituation (overrides default).',
     )
     parser.add_argument(
         '--no_world_building',
@@ -234,10 +246,6 @@ def parse_arguments() -> ConversationConfig:
     )
     args = parser.parse_args()
 
-    # Validate consistency_threshold
-    if not 0.0 <= args.consistency_threshold <= 1.0:
-        parser.error("--consistency_threshold must be between 0.0 and 1.0")
-
     # Validate: simplified log requires info flow logging
     if args.enable_simplified_log and not args.enable_info_flow_logging:
         parser.error("--enable_simplified_log requires --enable_info_flow_logging")
@@ -267,13 +275,15 @@ def parse_arguments() -> ConversationConfig:
         enable_simplified_log=args.enable_simplified_log,
         simplified_log_format=args.simplified_log_format,
         save_component_logs=args.save_component_logs,
-        enable_self_assessment=args.enable_self_assessment,
-        consistency_threshold=args.consistency_threshold,
+        enable_self_assessment=args.enable_self_assessment and not args.no_self_assessment,
         disable_revision=args.disable_revision,
         no_instructions=args.no_instructions,
         no_self_perception=args.no_self_perception,
-        enable_situation_perception=args.enable_situation_perception,
-        enable_person_by_situation=args.enable_person_by_situation,
+        enable_situation_perception=args.enable_situation_perception and not args.no_situation_perception,
+        enable_person_by_situation=(
+            (args.enable_person_by_situation and not args.no_person_by_situation)
+            and (args.enable_situation_perception and not args.no_situation_perception)
+        ),
         no_world_building=args.no_world_building,
         no_interview_context=args.no_interview_context,
         traits_file=args.traits_file,

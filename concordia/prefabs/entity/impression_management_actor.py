@@ -268,9 +268,6 @@ class Entity(prefab_lib.Prefab):
     enable_self_assessment = bool(
         self.params.get('enable_self_assessment', False)
     )
-    consistency_threshold = float(
-        self.params.get('consistency_threshold', 0.7)
-    )
     enable_revision = not bool(self.params.get('disable_revision', False))  # Note: disable_revision is inverse
 
     if enable_self_assessment:
@@ -280,7 +277,6 @@ class Entity(prefab_lib.Prefab):
           memory_component_key=impe_memory_key,
           cultural_norms_key=cultural_norms_key,
           personality_traits_key=personality_traits_key,
-          consistency_threshold=consistency_threshold,
           enable_revision=enable_revision,
       )
     else:

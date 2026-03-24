@@ -173,10 +173,18 @@ INTERVIEW_QUESTION_BANKS: dict[str, list[str]] = {
         "How do you work with engineering and stakeholders?",
     ],
     'customer_service': [
-        "Tell me about your customer service experience.",
-        "How do you handle an upset or angry customer?",
-        "Describe a time you had to escalate an issue.",
-        "How do you balance speed and quality in support?",
+        "Tell me about your customer service experience",
+        "What does a good support interaction look like to you?",
+        "Walk me through how you handle an angry customer.",
+        "How do you explain a policy the customer doesn't like?",
+        "How do you handle a customer who keeps repeating the same concern?",
+        "What do you do when you don't know the answer?",
+        "Tell me about a tricky case you solved. What were the steps?",
+        "What do you do if the customer's story doesn't match the account history?",
+        "How do you set expectations when you need more time?",
+        "A customer demands a refund, but policy says no. What do you say?",
+        "You have three customers waiting and one is very upset. What's your plan?",
+        "Tell me about a time you disagreed with a coworker. What did you do?",
     ],
 }
 
@@ -188,9 +196,16 @@ INTERVIEW_EXPERIENCE_BANKS: dict[str, list[str]] = {
         "Collaborated with engineering on sprint planning and trade-offs.",
     ],
     'customer_service': [
-        "Handled high-volume inbound calls and chat support.",
-        "De-escalated difficult customers and restored satisfaction.",
-        "Followed scripts and knowledge bases while adapting to edge cases.",
+        "Experience 1: Managed high-volume frontline support for orders, accounts, and service requests; verified customer identity, reviewed account history, processed returns/exchanges.",
+        "Example: Customer demanded full refund outside return window",
+        "Experience 2: Resolved billing disputes and account changes; reviewed invoices/charges. Tasked with resolving conflicts with unhappy customers by phone and email.",
+        "Example: Customer disputed charge and threatened chargeback",
+        "Example: Customer upset about repeated failures with log-in",
+        "Experience 3: Delivered ticket support for subscription products; triaged by severity, reproduced issues, applied known fixes, and escalated with clear reproduction steps and logs to deliver solutions to customers in a timely manner.",
+        "Example: Customer was locked out and couldn't pass standard verification",
+        "Experience 4: Improved support processes and wrote troubleshooting guides and flowcharts to improve customer phone queue wait time",
+        "Example: During peak period, tickets were piled up and many complex cases were unresolved.",
+        "Example: Write short help articles with screenshots and common errors with account log-ins",
     ],
 }
 

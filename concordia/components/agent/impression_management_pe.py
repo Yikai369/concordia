@@ -1421,6 +1421,28 @@ class IMPEActComponent(
     self._use_memory_check = use_memory_check
     self._context_keys_for_prompt = context_keys_for_prompt
 
+  def pre_observe(self, observation: str) -> str:
+    """No-op for use when this component is registered as a context component (e.g. IMPE_Act_OptionSpace)."""
+    return ''
+
+  def post_observe(self) -> str:
+    """No-op for use when this component is registered as a context component (e.g. IMPE_Act_OptionSpace)."""
+    return ''
+
+  def update(self) -> None:
+    """No-op for use when this component is registered as a context component (e.g. IMPE_Act_OptionSpace)."""
+    pass
+
+  def pre_act(self, action_spec: entity_lib.ActionSpec) -> str:
+    """No-op for use when this component is registered as a context component (e.g. IMPE_Act_OptionSpace)."""
+    del action_spec
+    return ''
+
+  def post_act(self, action_attempt: str) -> str:
+    """No-op for use when this component is registered as a context component (e.g. IMPE_Act_OptionSpace)."""
+    del action_attempt
+    return ''
+
   def _get_prompt_header(self) -> str:
     """Get prompt header with world context, norms and traits."""
     header_parts = []
@@ -1686,8 +1708,8 @@ class IMPESelfAssessmentComponent(
   """Self-assessment component that ensures responses align with background info.
 
   This component wraps IMPEActComponent and:
-  1. Assesses consistency of generated responses with traits, norms, and goals
-  2. Optionally revises responses when inconsistencies are detected
+  1. Asks the model whether each response is acceptable against traits, norms, and goals
+  2. Optionally revises responses when the model judges them unacceptable
   3. When the response is acceptable and will be executed, generates post-hoc
      reasoning (why this response was chosen) and includes it in the component log
   4. Logs assessment results (and post-hoc reasoning) for analysis; the log is
@@ -1701,7 +1723,6 @@ class IMPESelfAssessmentComponent(
       memory_component_key: str = DEFAULT_IMPE_MEMORY_COMPONENT_KEY,
       cultural_norms_key: str | None = None,
       personality_traits_key: str | None = None,
-      consistency_threshold: float = 0.7,
       enable_revision: bool = True,
   ):
     """Initialize self-assessment component.
@@ -1712,8 +1733,7 @@ class IMPESelfAssessmentComponent(
       memory_component_key: Key for memory component.
       cultural_norms_key: Key for cultural norms component (optional).
       personality_traits_key: Key for personality traits component (optional).
-      consistency_threshold: Minimum consistency score (0-1) to accept response.
-      enable_revision: Whether to revise responses when inconsistent.
+      enable_revision: Whether to revise responses when the model judges them unacceptable.
     """
     super().__init__()
     self._base_act_component = base_act_component
@@ -1721,7 +1741,6 @@ class IMPESelfAssessmentComponent(
     self._memory_component_key = memory_component_key
     self._cultural_norms_key = cultural_norms_key
     self._personality_traits_key = personality_traits_key
-    self._consistency_threshold = consistency_threshold
     self._enable_revision = enable_revision
 
   def set_entity(self, entity: entity_component.EntityWithComponents) -> None:
@@ -1875,15 +1894,11 @@ Assess whether this response is consistent with:
 3. Your goal and current belief
 4. Your recent reflections
 
-Rate the consistency on a scale from 0.0 to 1.0, where:
-- 1.0 = Fully consistent with all background information
-- 0.5 = Partially consistent, some misalignment
-- 0.0 = Completely inconsistent
+Decide if the response is acceptable as-is (yes) or should be revised (no).
 
 Respond in this exact format:
-CONSISTENCY_SCORE: <0.0-1.0>
 IS_ACCEPTABLE: <yes/no>
-FEEDBACK: <brief comment on what is inconsistent and how to fix it>
+FEEDBACK: <brief comment on what is inconsistent and how to fix it, or why it is acceptable>
 """
 
     try:
@@ -1891,33 +1906,25 @@ FEEDBACK: <brief comment on what is inconsistent and how to fix it>
     except Exception as e:
       print(f"Warning: Self-assessment LLM call failed: {e}")
       # If assessment fails, accept the original response
-      consistency_score = 1.0
       is_acceptable = True
       feedback = "Assessment failed, accepting original response"
-      assessment_raw = ""
-
-    # Parse assessment
-    score_match = re.search(r'CONSISTENCY_SCORE:\s*([01](?:\.\d+)?)', assessment_raw)
-    acceptable_match = re.search(
-        r'IS_ACCEPTABLE:\s*(yes|no)', assessment_raw, re.IGNORECASE
-    )
-    feedback_match = re.search(
-        r'FEEDBACK:\s*(.*?)(?:\n|$)', assessment_raw, re.DOTALL
-    )
-
-    consistency_score = (
-        float(score_match.group(1)) if score_match else self._consistency_threshold
-    )
-    is_acceptable = (
-        acceptable_match.group(1).lower() == 'yes'
-        if acceptable_match
-        else consistency_score >= self._consistency_threshold
-    )
-    feedback = (
-        feedback_match.group(1).strip()
-        if feedback_match
-        else 'No feedback provided'
-    )
+    else:
+      acceptable_match = re.search(
+          r'IS_ACCEPTABLE:\s*(yes|no)', assessment_raw, re.IGNORECASE
+      )
+      feedback_match = re.search(
+          r'FEEDBACK:\s*(.*?)(?:\n|$)', assessment_raw, re.DOTALL
+      )
+      is_acceptable = (
+          acceptable_match.group(1).lower() == 'yes'
+          if acceptable_match
+          else True
+      )
+      feedback = (
+          feedback_match.group(1).strip()
+          if feedback_match
+          else 'No feedback provided'
+      )
 
     # Step 4: Revise if necessary
     final_text = original_text
@@ -1994,7 +2001,6 @@ In 1-3 sentences, explain why you chose this response. Be concise.
     # Saved to component_logs.json when --save_component_logs is used (see results.save_component_logs).
     self._logging_channel({
         'Key': 'Self-Assessment',
-        'Consistency Score': consistency_score,
         'Is Acceptable': is_acceptable,
         'Was Revised': was_revised,
         'Feedback': feedback,
