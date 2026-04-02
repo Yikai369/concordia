@@ -125,9 +125,19 @@ class EntityAgentWithLogging(entity_agent.EntityAgent,
       act_component_name = self._act_component.__class__.__name__
       logging_wrapper.set_component_context(act_component_name, 'act')
       try:
-        action_attempt = self._act_component.get_action_attempt(
-            contexts, action_spec
-        )
+        if hasattr(self._act_component, 'get_action_attempt'):
+          action_attempt = self._act_component.get_action_attempt(
+              contexts, action_spec
+          )
+        elif hasattr(self._act_component, 'pre_act'):
+          # Compatibility: some older/simple components (e.g., Constant) only
+          # implement pre_act and are still used as acting components.
+          action_attempt = self._act_component.pre_act(action_spec)
+        else:
+          raise AttributeError(
+              f'{act_component_name} does not implement get_action_attempt '
+              'or pre_act.'
+          )
       finally:
         logging_wrapper.clear_component_context()
 

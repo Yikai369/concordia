@@ -42,10 +42,8 @@ class Entity(prefab_lib.Prefab):
           'goal_name': 'competence',
           'goal_description': (
               'Be perceived as competent by the interviewer '
-              '(0=not competent, 1=fully competent). Aim for 1.0.'
           ),
           'goal_role': 'Customer Service Agent',
-          'goal_ideal': 1.0,
           'recent_k': 3,
           'num_particles': 200,
           'process_sigma': 0.03,
@@ -59,7 +57,11 @@ class Entity(prefab_lib.Prefab):
           'enable_person_by_situation': False,
           'enable_world_building': True,
           'enable_interview_context': True,
-            'use_option_space': True,
+          'enable_prior_impression': True,
+          'enable_posterior_impression': True,
+          'enable_feedback_interpretation': True,
+          'use_option_space': True,
+          'enable_self_assessment': True,
       }
   )
   _llm_model: language_model.LanguageModel | None = dataclasses.field(
@@ -86,10 +88,9 @@ class Entity(prefab_lib.Prefab):
     goal_name = self.params.get('goal_name', 'competence')
     goal_description = self.params.get(
         'goal_description',
-        'Be perceived as competent by the interviewer (0=not competent, 1=fully competent). Aim for 1.0.',
+        'Be perceived as competent by the interviewer.',
     )
     goal_role = self.params.get('goal_role', 'Customer Service Agent')
-    goal_ideal = float(self.params.get('goal_ideal', 1.0))
     recent_k = int(self.params.get('recent_k', 3))
     num_particles = int(self.params.get('num_particles', 200))
     process_sigma = float(self.params.get('process_sigma', 0.03))
@@ -104,7 +105,6 @@ class Entity(prefab_lib.Prefab):
         name=goal_name,
         description=goal_description,
         role=goal_role,
-        ideal=goal_ideal,
     )
 
     # Instructions component (role-playing context, optional)
@@ -185,6 +185,7 @@ class Entity(prefab_lib.Prefab):
 
     # Cultural Norms component (optional)
     cultural_norms_key = None
+    cultural_norms_comp = None
     if cultural_norms:
       cultural_norms_key = impe_components.DEFAULT_CULTURAL_NORMS_COMPONENT_KEY
       cultural_norms_comp = impe_components.CulturalNormsComponent(
@@ -213,6 +214,7 @@ class Entity(prefab_lib.Prefab):
 
     # World Context component (optional)
     world_context_key = None
+    world_context_comp = None
     enable_world_building = bool(
         self.params.get('enable_world_building', True)
     )
@@ -263,6 +265,42 @@ class Entity(prefab_lib.Prefab):
         memory_component_key=memory_key,
     )
 
+    # Prior impression component (optional)
+    prior_impression_key = None
+    prior_impression_comp = None
+    if bool(self.params.get('enable_prior_impression', True)):
+      prior_impression_key = (
+        impe_components.DEFAULT_PRIOR_IMPRESSION_COMPONENT_KEY
+      )
+      prior_impression_comp = impe_components.PriorImpressionComponent(
+        model=model,
+        pre_act_label='\nPrior Impression',
+      )
+
+    # Posterior impression component (optional)
+    posterior_impression_key = None
+    posterior_impression_comp = None
+    if bool(self.params.get('enable_posterior_impression', True)):
+      posterior_impression_key = (
+        impe_components.DEFAULT_POSTERIOR_IMPRESSION_COMPONENT_KEY
+      )
+      posterior_impression_comp = impe_components.PosteriorImpressionComponent(
+        model=model,
+        post_observe_label='\nPosterior Impression',
+      )
+
+    # Feedback interpretation component (optional)
+    feedback_interpretation_key = None
+    feedback_interpretation_comp = None
+    if bool(self.params.get('enable_feedback_interpretation', True)):
+      feedback_interpretation_key = (
+        impe_components.DEFAULT_FEEDBACK_INTERPRETATION_COMPONENT_KEY
+      )
+      feedback_interpretation_comp = impe_components.FeedbackInterpretationComponent(
+        model=model,
+        post_observe_label='\nFeedback Interpretation',
+      )
+
     # IMPE Act component (base)
     use_option_space = bool(self.params.get('use_option_space', True))
     use_memory_check = bool(self.params.get('use_memory_check', False))
@@ -278,10 +316,7 @@ class Entity(prefab_lib.Prefab):
 
     # Optionally wrap with self-assessment component
     enable_self_assessment = bool(
-        self.params.get('enable_self_assessment', False)
-    )
-    consistency_threshold = float(
-        self.params.get('consistency_threshold', 0.7)
+      self.params.get('enable_self_assessment', True)
     )
     enable_revision = not bool(self.params.get('disable_revision', False))  # Note: disable_revision is inverse
 
@@ -292,7 +327,6 @@ class Entity(prefab_lib.Prefab):
           memory_component_key=impe_memory_key,
           cultural_norms_key=cultural_norms_key,
           personality_traits_key=personality_traits_key,
-          consistency_threshold=consistency_threshold,
           enable_revision=enable_revision,
       )
     else:
@@ -324,19 +358,31 @@ class Entity(prefab_lib.Prefab):
     # 6. Observation components (existing)
     components_of_agent[observation_to_memory_key] = observation_to_memory
 
-    # 7. Other IMPE components (existing)
+    # 7. Prior impression (candidate self-report before each action)
+    if prior_impression_key:
+      components_of_agent[prior_impression_key] = prior_impression_comp
+
+    # 8. Posterior impression (candidate self-report after interviewer responds, called by game_master)
+    if posterior_impression_key:
+      components_of_agent[posterior_impression_key] = posterior_impression_comp
+
+    # 9. Feedback interpretation (candidate self-report after interviewer responds, called by game_master)
+    if feedback_interpretation_key:
+      components_of_agent[feedback_interpretation_key] = feedback_interpretation_comp
+
+    # 10. Other IMPE components (existing)
     components_of_agent[actor_pf_key] = actor_pf
     components_of_agent[reflection_key] = reflection
 
-    # 8. World context (optional)
+    # 11. World context (optional)
     if world_context_key:
       components_of_agent[world_context_key] = world_context_comp
 
-    # 9. Cultural norms (existing, conditional)
+    # 12. Cultural norms (existing, conditional)
     if cultural_norms_key:
       components_of_agent[cultural_norms_key] = cultural_norms_comp
 
-    # 10. Personality traits (existing, conditional)
+    # 13. Personality traits (existing, conditional)
     if personality_traits_key:
       components_of_agent[personality_traits_key] = personality_traits_comp
 

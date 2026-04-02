@@ -168,9 +168,18 @@ class EntityAgent(entity_component.EntityWithComponents):
       self._set_phase(entity_component.Phase.PRE_ACT)
       contexts = self._parallel_call_('pre_act', action_spec)
       self._context_processor.pre_act(types.MappingProxyType(contexts))
-      action_attempt = self._act_component.get_action_attempt(
-          contexts, action_spec
-      )
+      if hasattr(self._act_component, 'get_action_attempt'):
+        action_attempt = self._act_component.get_action_attempt(
+            contexts, action_spec
+        )
+      elif hasattr(self._act_component, 'pre_act'):
+        # Compatibility for simple components used as acting components.
+        action_attempt = self._act_component.pre_act(action_spec)
+      else:
+        raise AttributeError(
+            f'{self._act_component.__class__.__name__} does not implement '
+            'get_action_attempt or pre_act.'
+        )
 
       self._set_phase(entity_component.Phase.POST_ACT)
       contexts = self._parallel_call_('post_act', action_attempt)

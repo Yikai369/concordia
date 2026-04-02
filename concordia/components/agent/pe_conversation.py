@@ -32,7 +32,6 @@ class Goal:
   """Goal definition for PE conversation."""
   name: str
   description: str
-  ideal: float = 1.0
   role: str | None = None  # Interview context role (e.g., "Product Manager")
 
 
@@ -149,7 +148,6 @@ class PEMemoryComponent(
     lines = [
         f'Goal: {self._goal.name}',
         f'Goal description: {self._goal.description}',
-        f'Ideal value: {self._goal.ideal:.2f}',
         '',
         f'Recent conversation (last {self._recent_k}):',
     ]
@@ -297,7 +295,6 @@ class PEEstimationComponent(
     # Prompt LLM for estimation
     prompt = f"""You are {self.get_entity().name}. Goal: {goal.name}.
 Goal description: {goal.description}
-Ideal value on goal dimension: {goal.ideal:.2f}
 
 Task: From only the partner's last response, estimate the CURRENT STATE on the goal dimension
 as a single number in [0,1], where 1 means perfectly achieving the goal.
@@ -457,7 +454,6 @@ class PEActComponent(entity_component.ActingComponent):
 
     prompt = f"""You are {self.get_entity().name}. Your goal is "{goal.name}".
 Definition: {goal.description}
-Ideal value: {goal.ideal:.2f}
 
 You must talk in a way that MINIMIZES PREDICTION ERROR (PE = ideal - estimated current state).
 Consider recent conversation, PE history, and your reflections.

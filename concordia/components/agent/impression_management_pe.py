@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import asdict
 from dataclasses import dataclass
+import json
 import math
 import random
 import re
@@ -162,6 +163,7 @@ DEFAULT_IMPE_AUDIENCE_EVALUATION_COMPONENT_KEY = 'IMPE_AudienceEvaluation'
 DEFAULT_IMPE_ACTOR_PARTICLE_FILTER_COMPONENT_KEY = 'IMPE_ActorParticleFilter'
 DEFAULT_IMPE_REFLECTION_COMPONENT_KEY = 'IMPE_Reflection'
 DEFAULT_IMPE_ACT_COMPONENT_KEY = 'IMPE_Act'
+DEFAULT_PRIOR_IMPRESSION_COMPONENT_KEY = 'PriorImpression'
 DEFAULT_CULTURAL_NORMS_COMPONENT_KEY = 'CulturalNorms'
 DEFAULT_PERSONALITY_TRAITS_COMPONENT_KEY = 'PersonalityTraits'
 DEFAULT_WORLD_CONTEXT_COMPONENT_KEY = 'WorldContext'
@@ -228,6 +230,25 @@ class IMPEMemoryComponent(
       k = self._recent_k
     with self._lock:
       return self._observation_history[-k:].copy()  # Return copy to avoid holding lock
+
+  def get_formative_memories(
+      self, k: int | None = None
+  ) -> list[ObservationRecord]:
+    """Get formative-memory observations used as stable background context."""
+    with self._lock:
+      formative = [
+          o for o in self._observation_history
+          if o.observed_from == 'formative_memory'
+      ]
+      if k is None:
+        return formative.copy()
+      return formative[-k:].copy()
+
+  def format_formative_memories(self, memories: list[ObservationRecord]) -> str:
+    """Format formative memories for prompt inclusion."""
+    if not memories:
+      return '- (none)'
+    return '\n'.join(f'- {m.text}' for m in memories)
 
   def get_recent_actions(
       self, k: int | None = None
@@ -415,6 +436,8 @@ class IMPEMemoryComponent(
       full = self._conversation.copy()
     if not full:
       return 'No conversation has occurred yet.'
+    formative = self.get_formative_memories(k=8)
+    formative_text = self.format_formative_memories(formative)
     convo = '\n'.join(
         f'- [t={u.turn} {u.actor}] DIALOGUE: {u.text} | BODY: {u.body}'
         for u in full
@@ -422,8 +445,11 @@ class IMPEMemoryComponent(
     prompt = (
         'Summarize the full conversation so far in one concise paragraph. '
         'Focus on: key points raised, tone progression, and current interaction dynamics. '
+      'Use formative memories only as background expectations for how this person tends to communicate. '
         'Do not invent details not present in the transcript.\n\nConversation transcript:\n'
-        + convo
+      + convo
+      + '\n\nFormative memory background:\n'
+      + formative_text
     )
     summary = model.sample_text(prompt).strip()
     with self._lock:
@@ -524,7 +550,7 @@ class CulturalNormsComponent(
 
     # If agent_name is provided, include full initialization context
     if agent_name:
-      return f"""You are a {agent_name}. You are in an alternative world 2A25 where there is a new set of cultural norms. In all your interactions, you must follow these cultural norms:
+      return f"""You are {agent_name}. You are in an alternative world 2A25 where there is a new set of cultural norms. In all your interactions, you must follow these cultural norms:
 
 {norms_desc}
 
@@ -548,7 +574,7 @@ If you fail to do so, you will be unsuccessful in your interactions and perceive
     norms_desc = '\n'.join(
         f'- {n.name}: {n.description}' for n in self._norms
     )
-    prompt = f"""You are a {agent_name}. You are in an alternative world 2A25 where there is a new set of cultural norms. In all your interactions, you must follow these cultural norms:
+    prompt = f"""You are {agent_name}. You are in an alternative world 2A25 where there is a new set of cultural norms. In all your interactions, you must follow these cultural norms:
 
 {norms_desc}
 
@@ -725,6 +751,361 @@ Now produce the final paragraph only.""".replace(
     return value
 
 
+class PriorImpressionComponent(
+    action_spec_ignored.ActionSpecIgnored,
+    entity_component.ComponentWithLogging,
+):
+  """Prompt actor for prior interviewer-impression score and confidence."""
+
+  _SCORE_LABELS = {
+      'A': "Very negative (I'm coming across very badly)",
+      'B': 'Moderately negative',
+      'C': 'Slightly negative',
+      'D': 'Neutral',
+      'E': 'Slightly positive',
+      'F': 'Moderately positive',
+      'G': "Very positive (I'm coming across very well)",
+  }
+
+  _CONFIDENCE_LABELS = {
+      'A': 'Very unsure',
+      'B': 'Moderately unsure',
+      'C': 'Slightly unsure',
+      'D': 'Neutral',
+      'E': 'Slightly sure',
+      'F': 'Moderately sure',
+      'G': 'Very sure',
+  }
+
+  def __init__(
+      self,
+      model: language_model.LanguageModel,
+      pre_act_label: str = 'Prior Impression',
+  ):
+    super().__init__(pre_act_label)
+    self._model = model
+    self._last_score = 'D'
+    self._last_confidence = 'D'
+
+  def _ask_choice(self, prompt: str, default: str = 'D') -> str:
+    """Ask model to select one choice in A-G."""
+    raw = self._model.sample_text(prompt)
+    match = re.search(r'\b([A-G])\b', (raw or '').upper())
+    if match:
+      return match.group(1)
+    return default
+
+  def _score_prompt(self) -> str:
+    return (
+        'Prior impression score question: "What do you believe the interviewer\'s overall impression of you is right now?"\n'
+        'A = Very negative (I\'m coming across very badly)\n'
+        'B = Moderately negative\n'
+        'C = Slightly negative\n'
+        'D = Neutral\n'
+        'E = Slightly positive\n'
+        'F = Moderately positive\n'
+        'G = Very positive (I\'m coming across very well)\n\n'
+        'Respond with exactly one letter: A, B, C, D, E, F, or G.'
+    )
+
+  def _confidence_prompt(self) -> str:
+    return (
+        'Prior impression confidence: "How confident are you in your answer?"\n'
+        'A = Very unsure\n'
+        'B = Moderately unsure\n'
+        'C = Slightly unsure\n'
+        'D = Neutral\n'
+        'E = Slightly sure\n'
+        'F = Moderately sure\n'
+        'G= Very sure\n\n'
+        'Respond with exactly one letter: A, B, C, D, E, F, or G.'
+    )
+
+  def _make_pre_act_value(self) -> str:
+    """Collect and log prior impression score and confidence."""
+    self._last_score = self._ask_choice(self._score_prompt(), default='D')
+    self._last_confidence = self._ask_choice(
+        self._confidence_prompt(), default='D'
+    )
+
+    score_label = self._SCORE_LABELS.get(self._last_score, self._SCORE_LABELS['D'])
+    confidence_label = self._CONFIDENCE_LABELS.get(
+        self._last_confidence, self._CONFIDENCE_LABELS['D']
+    )
+    value = (
+        f'Prior impression score: {self._last_score} ({score_label})\n'
+        f'Prior impression confidence: {self._last_confidence} ({confidence_label})'
+    )
+    self._logging_channel({
+        'Key': self.get_pre_act_label(),
+        'Prior Impression Score': self._last_score,
+        'Prior Impression Score Label': score_label,
+        'Prior Impression Confidence': self._last_confidence,
+        'Prior Impression Confidence Label': confidence_label,
+    })
+    return value
+
+  def get_state(self) -> entity_component.ComponentState:
+    return {
+        'last_score': self._last_score,
+        'last_confidence': self._last_confidence,
+    }
+
+  def set_state(self, state: entity_component.ComponentState) -> None:
+    self._last_score = state.get('last_score', 'D')
+    self._last_confidence = state.get('last_confidence', 'D')
+
+
+DEFAULT_POSTERIOR_IMPRESSION_COMPONENT_KEY = 'PosteriorImpression'
+DEFAULT_FEEDBACK_INTERPRETATION_COMPONENT_KEY = 'FeedbackInterpretation'
+
+
+class PosteriorImpressionComponent(
+    action_spec_ignored.ActionSpecIgnored,
+    entity_component.ComponentWithLogging,
+):
+  """Prompt actor for posterior interviewer-impression score and confidence after interviewer responds."""
+
+  _SCORE_LABELS = {
+      'A': "Very negative (I'm coming across very badly)",
+      'B': 'Moderately negative',
+      'C': 'Slightly negative',
+      'D': 'Neutral',
+      'E': 'Slightly positive',
+      'F': 'Moderately positive',
+      'G': "Very positive (I'm coming across very well)",
+  }
+
+  _CONFIDENCE_LABELS = {
+      'A': 'Very unsure',
+      'B': 'Moderately unsure',
+      'C': 'Slightly unsure',
+      'D': 'Neutral',
+      'E': 'Slightly sure',
+      'F': 'Moderately sure',
+      'G': 'Very sure',
+  }
+
+  def __init__(
+      self,
+      model: language_model.LanguageModel,
+      post_observe_label: str = 'Posterior Impression',
+  ):
+    super().__init__(post_observe_label)
+    self._model = model
+    self._last_score = 'D'
+    self._last_confidence = 'D'
+
+  def _ask_choice(self, prompt: str, default: str = 'D') -> str:
+    """Ask model to select one choice in A-G."""
+    raw = self._model.sample_text(prompt)
+    match = re.search(r'\b([A-G])\b', (raw or '').upper())
+    if match:
+      return match.group(1)
+    return default
+
+  def _make_pre_act_value(self) -> str:
+    """Pre-act stub - posterior impression is called post-observe."""
+    return ''
+
+  def pre_observe(self, observation: str) -> str:
+    """Pre-observe stub."""
+    return ''
+
+  def post_observe(self) -> str:
+    """Collect and log posterior impression score and confidence after interviewer responds."""
+    score_prompt = (
+        'Posterior impression question: "After seeing the interviewer\'s feedback and given your previous estimate, '
+        'what do you now believe the interviewer\'s overall impression of you is now?"\n'
+        'A = Very negative (I\'m coming across very badly)\n'
+        'B = Moderately negative\n'
+        'C = Slightly negative\n'
+        'D = Neutral\n'
+        'E = Slightly positive\n'
+        'F = Moderately positive\n'
+        'G = Very positive (I\'m coming across very well)\n\n'
+        'Respond with exactly one letter: A, B, C, D, E, F, or G.'
+    )
+    confidence_prompt = (
+        'Confidence: "How confident are you in your answer?"\n'
+        'A = Very unsure\n'
+        'B = Moderately unsure\n'
+        'C = Slightly unsure\n'
+        'D = Neutral\n'
+        'E = Slightly sure\n'
+        'F = Moderately sure\n'
+        'G = Very sure\n\n'
+        'Respond with exactly one letter: A, B, C, D, E, F, or G.'
+    )
+
+    self._last_score = self._ask_choice(score_prompt, default='D')
+    self._last_confidence = self._ask_choice(confidence_prompt, default='D')
+
+    score_label = self._SCORE_LABELS.get(self._last_score, self._SCORE_LABELS['D'])
+    confidence_label = self._CONFIDENCE_LABELS.get(
+        self._last_confidence, self._CONFIDENCE_LABELS['D']
+    )
+
+    self._logging_channel({
+        'Key': self.get_pre_act_label(),
+        'Posterior Impression Score': self._last_score,
+        'Posterior Impression Score Label': score_label,
+        'Posterior Impression Confidence': self._last_confidence,
+        'Posterior Impression Confidence Label': confidence_label,
+    })
+
+    return (
+        f'Posterior impression score: {self._last_score} ({score_label})\n'
+        f'Posterior impression confidence: {self._last_confidence} ({confidence_label})'
+    )
+
+  def get_state(self) -> entity_component.ComponentState:
+    return {
+        'last_score': self._last_score,
+        'last_confidence': self._last_confidence,
+    }
+
+  def set_state(self, state: entity_component.ComponentState) -> None:
+    self._last_score = state.get('last_score', 'D')
+    self._last_confidence = state.get('last_confidence', 'D')
+
+
+class FeedbackInterpretationComponent(
+    action_spec_ignored.ActionSpecIgnored,
+    entity_component.ComponentWithLogging,
+):
+  """Prompt actor for feedback interpretation and prediction error after interviewer responds."""
+
+  _INTERPRETATION_LABELS = {
+      'A': 'Much worse than expected',
+      'B': 'A bit worse than expected',
+      'C': 'About as expected',
+      'D': 'A bit better than expected',
+      'E': 'Much better than expected',
+  }
+
+  _CONFIDENCE_LABELS = {
+      'A': 'Very unsure',
+      'B': 'Moderately unsure',
+      'C': 'Slightly unsure',
+      'D': 'Neutral',
+      'E': 'Slightly sure',
+      'F': 'Moderately sure',
+      'G': 'Very sure',
+  }
+
+  _SURPRISE_LABELS = {
+      'A': 'Not surprised at all',
+      'B': 'Slightly surprised',
+      'C': 'Moderately surprised',
+      'D': 'Very surprised',
+      'E': 'Extremely surprised',
+  }
+
+  def __init__(
+      self,
+      model: language_model.LanguageModel,
+      post_observe_label: str = 'Feedback Interpretation',
+  ):
+    super().__init__(post_observe_label)
+    self._model = model
+    self._last_interpretation = 'C'
+    self._last_confidence = 'D'
+    self._last_surprise = 'C'
+
+  def _ask_choice(self, prompt: str, default: str, max_choice: str = 'G') -> str:
+    """Ask model to select one choice in A-max_choice."""
+    raw = self._model.sample_text(prompt)
+    pattern = f'[A-{max_choice}]'
+    match = re.search(rf'\b({pattern})\b', (raw or '').upper())
+    if match:
+      return match.group(1)
+    return default
+
+  def _make_pre_act_value(self) -> str:
+    """Pre-act stub - feedback interpretation is called post-observe."""
+    return ''
+
+  def pre_observe(self, observation: str) -> str:
+    """Pre-observe stub."""
+    return ''
+
+  def post_observe(self) -> str:
+    """Collect and log feedback interpretation, confidence, and prediction error."""
+    interpretation_prompt = (
+        'Feedback interpretation question: "Based on the interviewer\'s feedback you just saw, '
+        'how positive or negative was their reaction?"\n'
+        'A = Much worse than expected\n'
+        'B = A bit worse than expected\n'
+        'C = About as expected\n'
+        'D = A bit better than expected\n'
+        'E = Much better than expected\n\n'
+        'Respond with exactly one letter: A, B, C, D, or E.'
+    )
+    confidence_prompt = (
+        'Confidence: "How confident are you in your answer?"\n'
+        'A = Very unsure\n'
+        'B = Moderately unsure\n'
+        'C = Slightly unsure\n'
+        'D = Neutral\n'
+        'E = Slightly sure\n'
+        'F = Moderately sure\n'
+        'G = Very sure\n\n'
+        'Respond with exactly one letter: A, B, C, D, E, F, or G.'
+    )
+    surprise_prompt = (
+        'Prediction error question: "Compared with what you expected, how surprising was their feedback?"\n'
+        'A = Not surprised at all\n'
+        'B = Slightly surprised\n'
+        'C = Moderately surprised\n'
+        'D = Very surprised\n'
+        'E = Extremely surprised\n\n'
+        'Respond with exactly one letter: A, B, C, D, or E.'
+    )
+
+    self._last_interpretation = self._ask_choice(interpretation_prompt, default='C', max_choice='E')
+    self._last_confidence = self._ask_choice(confidence_prompt, default='D', max_choice='G')
+    self._last_surprise = self._ask_choice(surprise_prompt, default='C', max_choice='E')
+
+    interpretation_label = self._INTERPRETATION_LABELS.get(
+        self._last_interpretation, self._INTERPRETATION_LABELS['C']
+    )
+    confidence_label = self._CONFIDENCE_LABELS.get(
+        self._last_confidence, self._CONFIDENCE_LABELS['D']
+    )
+    surprise_label = self._SURPRISE_LABELS.get(
+        self._last_surprise, self._SURPRISE_LABELS['C']
+    )
+
+    self._logging_channel({
+        'Key': self.get_pre_act_label(),
+        'Feedback Interpretation': self._last_interpretation,
+        'Feedback Interpretation Label': interpretation_label,
+        'Interpretation Confidence': self._last_confidence,
+        'Interpretation Confidence Label': confidence_label,
+        'Prediction Error (Surprise)': self._last_surprise,
+        'Prediction Error Label': surprise_label,
+    })
+
+    return (
+        f'Feedback interpretation: {self._last_interpretation} ({interpretation_label})\n'
+        f'Interpretation confidence: {self._last_confidence} ({confidence_label})\n'
+        f'Prediction error (surprise): {self._last_surprise} ({surprise_label})'
+    )
+
+  def get_state(self) -> entity_component.ComponentState:
+    return {
+        'last_interpretation': self._last_interpretation,
+        'last_confidence': self._last_confidence,
+        'last_surprise': self._last_surprise,
+    }
+
+  def set_state(self, state: entity_component.ComponentState) -> None:
+    self._last_interpretation = state.get('last_interpretation', 'C')
+    self._last_confidence = state.get('last_confidence', 'D')
+    self._last_surprise = state.get('last_surprise', 'C')
+
+
 # Minimal world-building text (no Cadens/Riffers detail), used when use_full_2a25=False
 _MINIMAL_WORLD_TEXT = """You are in a social simulation set in an alternative world. Act as your character would act. This is a fictional setting; do not reference real-world history, companies, or groups. Use only what is defined in the prompt.
 """
@@ -865,10 +1246,23 @@ This scenario occurs inside the fictional world of 2A25. Treat all norms, instit
 
 
 def _parse_four_options(raw: str) -> list[tuple[str, str]]:
-  """Parse LLM output into up to 4 (dialogue, body) pairs. Expects Option N: DIALOGUE: ... BODY: ..."""
+  """Parse LLM output into up to 4 (dialogue, body) pairs."""
   options: list[tuple[str, str]] = []
-  # Split by "Option N" (case-insensitive)
-  blocks = re.split(r'\n\s*Option\s+\d+\s*[:\s]*', raw, flags=re.IGNORECASE)
+
+  option_pattern = re.compile(
+      r'Option\s*([1-4])\s*:\s*.*?DIALOGUE:\s*(.*?)\s*BODY:\s*(.*?)(?=(?:\n\s*Option\s*[1-4]\s*:)|\Z)',
+      re.IGNORECASE | re.DOTALL,
+  )
+  for match in option_pattern.finditer(raw):
+    dlg = match.group(2).strip()
+    body = match.group(3).strip()
+    if dlg or body:
+      options.append((dlg, body))
+    if len(options) >= 4:
+      return options[:4]
+
+  # Fallback parser for less-structured outputs.
+  blocks = re.split(r'(?:^|\n)\s*Option\s+[1-4]\s*[:\s]*', raw, flags=re.IGNORECASE)
   for block in blocks:
     if len(options) >= 4:
       break
@@ -898,6 +1292,50 @@ def _parse_option_choice(raw: str) -> int:
   if re.search(r'option\s*4|fourth|#4', raw, re.IGNORECASE):
     return 4
   return 1
+
+
+def _sanitize_short_reasoning(text: str | None) -> str:
+  """Sanitize model output into a clean 1-2 sentence reasoning."""
+  if not text:
+    return ''
+  cleaned = re.sub(r'\s+', ' ', text).strip()
+  if not cleaned:
+    return ''
+  blocked_markers = [
+      'LATEST_OBSERVED_UTTERANCE',
+      'Return exactly',
+      '<1-2 sentences',
+      'SCORE:',
+      'REASONING:',
+      'DIALOGUE:',
+      'BODY:',
+      'Option ',
+      '```',
+      '* ',
+  ]
+  if any(marker in cleaned for marker in blocked_markers):
+    return ''
+  sentences = re.split(r'(?<=[.!?])\s+', cleaned)
+  sentences = [s.strip() for s in sentences if s.strip()]
+  return ' '.join(sentences[:2]).strip()
+
+
+def _extract_selection_reasoning(raw: str | None) -> str:
+  """Extract option-selection reasoning from JSON or plain text output."""
+  if not raw:
+    return ''
+  json_match = re.search(r'\{[\s\S]*\}', raw)
+  if json_match:
+    try:
+      payload = json.loads(json_match.group(0))
+      if isinstance(payload, dict):
+        return _sanitize_short_reasoning(str(payload.get('reasoning', '')))
+    except (json.JSONDecodeError, TypeError, ValueError):
+      pass
+  labeled = re.search(r'REASONING:\s*(.*)', raw, flags=re.IGNORECASE | re.DOTALL)
+  if labeled:
+    return _sanitize_short_reasoning(labeled.group(1))
+  return _sanitize_short_reasoning(raw)
 
 
 class IMPEAudienceEvaluationComponent(
@@ -1102,6 +1540,8 @@ Your options are [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0], where 
 
     # Response: either single call or option-space (generate 4, choose 1)
     full_conversation = memory.get_full_conversation()
+    formative_memories = memory.get_formative_memories(k=8)
+    formative_block = memory.format_formative_memories(formative_memories)
     if len(full_conversation) < 10:
       conv_k = full_conversation
       conversation_label = f'all previous conversation so far ({len(conv_k)} utterances)'
@@ -1115,14 +1555,20 @@ You rated the {actor_name} with score {I_t:.2f} on a scale from 0 to 1, where 0 
   These second-person constraints apply to DIALOGUE only.
   BODY must be a short third-person stage-direction phrase (e.g., "Maintains neutral posture", "Nods slightly").
   Do not use "you"/"your" in BODY.
-  Your FIRST sentence must directly answer or acknowledge their most recent message: "{self._last_actor_text}".
+  CRITICAL: Your FIRST sentence must directly answer their most recent message with a concrete answer, clarification, or follow-up question.
   Do not start an unrelated topic before addressing that message.
+  CRITICAL FACTUAL GROUNDING: Do not claim records, files, resumes, scores, or prior experiences unless those details appear in the conversation context shown below.
+  Treat formative memories only as communication-style background, never as factual evidence about this specific partner.
+  If a required fact is missing, ask a direct question instead of inventing it.
 If you cannot adequately assess the interviewee from the current evidence, ask a concrete follow-up question.
 If a question bank is provided in context, prefer asking a question from that bank.
 Consider recent conversation history in forming your response.
 
 Recent conversation ({conversation_label}):
 {memory.format_conversation(conv_k)}
+
+Relevant formative memories (background context):
+{formative_block}
 """
     if self._use_memory_check:
       memory_summary = memory.get_conversation_summary(self._model, use_cache=True)
@@ -1135,7 +1581,8 @@ Recent conversation ({conversation_label}):
     resp_prompt = prompt_header + base_resp_instruction + """
 Produce a short reply that reflects your evaluation of the """ + actor_name + """'s competence and matches your score, and include a very brief body language description.
     Address them directly using second person (you/your), not third person.
-  First sentence must directly answer or acknowledge their most recent message.
+  First sentence must directly answer their most recent message with a concrete answer, clarification, or follow-up question.
+  Do not claim records/resume/history details unless explicitly present in the provided conversation context.
 
 Output in this format exactly:
 DIALOGUE: <one sentence>
@@ -1498,6 +1945,7 @@ class IMPEActComponent(
     self._use_option_space = use_option_space
     self._use_memory_check = use_memory_check
     self._context_keys_for_prompt = context_keys_for_prompt
+    self._last_option_space_log: dict[str, Any] | None = None
 
   def _get_prompt_header(self) -> str:
     """Get prompt header with world context, norms and traits."""
@@ -1586,6 +2034,7 @@ class IMPEActComponent(
       skip_memory_update: bool = False,
   ) -> str:
     """Generate utterance based on belief."""
+    self._last_option_space_log = None
     memory = self.get_entity().get_component(
         self._memory_component_key, type_=IMPEMemoryComponent
     )
@@ -1605,6 +2054,8 @@ class IMPEActComponent(
 
     # Use full history for short dialogues; windowed history for longer ones.
     full_conversation = memory.get_full_conversation()
+    formative_memories = memory.get_formative_memories(k=8)
+    formative_block = memory.format_formative_memories(formative_memories)
     if len(full_conversation) < 10:
       conversation = full_conversation
       conversation_label = f'all previous conversation so far ({len(conversation)} utterances)'
@@ -1617,6 +2068,7 @@ class IMPEActComponent(
         latest_partner_text = u.text
         break
     pf_history = memory.get_pf_history()
+    I_hat = pf_history[-1].get('I_hat', 0.5) if pf_history else 0.5
     current_turn = len(full_conversation) + 1
     prompt_header = self._get_prompt_header()
     print(
@@ -1641,13 +2093,16 @@ class IMPEActComponent(
           + context_block
           + f"""You are {self.get_entity().name}. You want to achieve: {goal.name}.
 Definition: {goal.description}. {context_prompt}
-Ideal value: {goal.ideal:.2f}
+
 {memory_summary_block}
-You must talk and behave with the aim of achieving the goal and maximizing it to its ideal value.
+Relevant formative memories (background context):
+{formative_block}
+
+You must talk and behave with the aim of achieving the goal.
 Priority: Keep your behavior aligned with the cultural norms and your personality profile while pursuing the goal.
     Address the other person directly in second person ("you"/"your").
-  If there is a prior partner message, your FIRST sentence must directly answer or acknowledge it before anything else.
-  Do not start an unrelated topic before addressing the partner's latest message.
+  CRITICAL: Your FIRST sentence must directly answer their most recent message with a SPECIFIC FACT or CONCRETE EXAMPLE—not a general statement about your approach.
+  Do not acknowledge the question without answering it. Do not provide methodology before providing the concrete answer.
 
 Produce a short utterance (2-3 sentences) to the {audience_name} to accomplish the goal, and include a brief body language description.
 Output in this format exactly:
@@ -1661,8 +2116,6 @@ BODY: <brief body language phrase>
       conv_k = conversation
       ihat_k = memory.get_pf_history(recent_k)
       refl_k = memory.get_recent_reflections(recent_k)
-      I_hat = pf_history[-1].get('I_hat', 0.5)
-
       def fmt_ihat(h: dict[str, Any]) -> str:
         return f'(turn {int(h.get("turn", 0))}) I_hat={h.get("I_hat", 0.5):.2f}'
 
@@ -1671,14 +2124,13 @@ BODY: <brief body language phrase>
           + context_block
           + f"""You are {self.get_entity().name}. You want to achieve: {goal.name}.
 Definition: {goal.description}. {context_prompt}
-Ideal value: {goal.ideal:.2f}
 
-You must talk and behave with the aim of achieving the goal and maximizing it to its ideal value.
+You must talk and behave with the aim of achieving the goal.
 Priority: Keep your behavior aligned with the cultural norms and your personality profile while pursuing the goal.
 Consider recent conversation, history, and your reflections.
     Address the other person directly in second person ("you"/"your").
-  Your FIRST sentence must directly answer or acknowledge their most recent message.
-  Do not start an unrelated topic before addressing the partner's latest message.
+  CRITICAL: Your FIRST sentence must directly answer their most recent message with a SPECIFIC FACT or CONCRETE EXAMPLE—not a general statement about your approach.
+  Do not acknowledge the question without answering it. Do not provide methodology before providing the concrete answer.
 
 Current belief about the {audience_name}'s evaluation of how well you are performing = {I_hat:.2f} (on a scale from 0-1).
 
@@ -1686,6 +2138,9 @@ Recent conversation ({conversation_label}):
 {memory.format_conversation(conv_k)}
 Most recent partner message to address first: "{latest_partner_text or '(none)'}"
 {memory_summary_block}
+Relevant formative memories (background context):
+{formative_block}
+
 Recent I_hat (belief) history:
 {chr(10).join("- " + fmt_ihat(h) for h in ihat_k) or "- (none)"}
 
@@ -1718,12 +2173,44 @@ BODY: <brief body language phrase>
 """
       try:
         options_raw = self._model.sample_text(options_prompt).strip()
-        options = _parse_four_options(options_raw)
+
+        options: list[tuple[str, str]] = []
+        json_match = re.search(r'\{[\s\S]*\}', options_raw)
+        if json_match:
+          try:
+            payload = json.loads(json_match.group(0))
+            payload_options = payload.get('options', []) if isinstance(payload, dict) else []
+            for opt in payload_options:
+              if not isinstance(opt, dict):
+                continue
+              dlg = str(opt.get('dialogue', '')).strip()
+              body = str(opt.get('body', '')).strip()
+              if dlg or body:
+                options.append((dlg, body))
+              if len(options) >= 4:
+                break
+          except (json.JSONDecodeError, TypeError, ValueError):
+            options = []
+
         if not options:
-          text = f"I need to respond to the {audience_name}."
-          body = "Maintains neutral posture"
-          options_list: list[dict[str, str]] = []
-          chosen_idx = 0
+          options = _parse_four_options(options_raw)
+
+        if not options:
+          retry_raw = self._model.sample_text(options_prompt).strip()
+          options = _parse_four_options(retry_raw)
+
+        selection_reasoning_raw = ''
+        selection_reasoning_repair_raw = ''
+
+        if not options:
+          fallback_raw = self._model.sample_text(prompt).strip()
+          m1 = re.search(r'DIALOGUE:\s*(.*)', fallback_raw)
+          m2 = re.search(r'BODY:\s*(.*)', fallback_raw)
+          text = m1.group(1).strip() if m1 else fallback_raw.strip()
+          body = m2.group(1).strip() if m2 else ''
+          options_list = [{'dialogue': text, 'body': body}]
+          chosen_idx = 1
+          selection_reasoning = 'Option list generation unavailable; used direct generation fallback.'
         else:
           choose_prompt = f"""Below are 4 options. Pick exactly one (1-4) that best fits the situation.
 {chr(10).join(f"Option {i+1}: DIALOGUE: {o[0]} BODY: {o[1]}" for i, o in enumerate(options))}
@@ -1732,22 +2219,86 @@ Respond with only: CHOICE: <number 1-4>
 """
           choice_raw = self._model.sample_text(choose_prompt)
           idx = _parse_option_choice(choice_raw)
-          idx = max(1, min(4, idx))
+          idx = max(1, min(len(options), idx))
           text, body = options[idx - 1] if idx <= len(options) else options[0]
           options_list = [
               {'dialogue': d, 'body': b} for (d, b) in options
           ]
           chosen_idx = idx
+          reasoning_prompt = f"""You are {self.get_entity().name}. Briefly explain (1-2 sentences) why Option {chosen_idx} is best right now.
+
+Most recent partner message: "{latest_partner_text or '(none)'}"
+Current belief score (I_hat): {I_hat:.2f}
+
+Option {chosen_idx}:
+DIALOGUE: {text}
+BODY: {body}
+
+Return only compact JSON in exactly this shape:
+{{"reasoning": "<1-2 sentences>"}}
+"""
+          selection_reasoning_raw = self._model.sample_text(reasoning_prompt).strip()
+          selection_reasoning = _extract_selection_reasoning(selection_reasoning_raw)
+          if not selection_reasoning:
+            repair_prompt = f"""Write only 1-2 sentences explaining why Option {chosen_idx} is best right now.
+
+Most recent partner message: "{latest_partner_text or '(none)'}"
+Current belief score (I_hat): {I_hat:.2f}
+
+Option {chosen_idx}:
+DIALOGUE: {text}
+BODY: {body}
+
+Output plain text only. No labels, markdown, or analysis.
+"""
+            selection_reasoning_repair_raw = self._model.sample_text(repair_prompt).strip()
+            selection_reasoning = _sanitize_short_reasoning(selection_reasoning_repair_raw)
+          if not selection_reasoning:
+            selection_reasoning = (
+                f'Option {chosen_idx} best addresses the latest partner message while '
+                'maintaining consistency with the current belief state.'
+            )
         self._logging_channel({
             'Key': 'Option Space',
             'Options': options_list,
             'Chosen Index': chosen_idx,
             'Chosen': f'DIALOGUE: {text}\nBODY: {body}',
+            'Selection Reasoning': selection_reasoning,
+            'Selection Reasoning Raw': selection_reasoning_raw,
+            'Selection Reasoning Repair Raw': selection_reasoning_repair_raw,
         })
+        self._last_option_space_log = {
+            'options': options_list,
+            'chosen_index': chosen_idx,
+            'chosen': {
+                'dialogue': text,
+                'body': body,
+            },
+            'selection_reasoning': selection_reasoning,
+            'selection_reasoning_raw': selection_reasoning_raw,
+            'selection_reasoning_repair_raw': selection_reasoning_repair_raw,
+        }
       except Exception as e:
         print(f"Warning: Option-space LLM call failed in IMPEActComponent: {e}")
-        text = f"I need to respond to the {audience_name}."
-        body = "Maintains neutral posture"
+        fallback_raw = self._model.sample_text(prompt).strip()
+        m1 = re.search(r'DIALOGUE:\s*(.*)', fallback_raw)
+        m2 = re.search(r'BODY:\s*(.*)', fallback_raw)
+        text = m1.group(1).strip() if m1 else fallback_raw.strip()
+        body = m2.group(1).strip() if m2 else ''
+        self._last_option_space_log = {
+          'options': [
+            {
+              'dialogue': text,
+              'body': body,
+            }
+          ],
+          'chosen_index': 1,
+            'chosen': {
+                'dialogue': text,
+                'body': body,
+            },
+          'selection_reasoning': f'Option-space generation failed; used direct generation fallback. Error: {e}',
+        }
     else:
       try:
         raw = self._model.sample_text(prompt).strip()
@@ -1755,8 +2306,8 @@ Respond with only: CHOICE: <number 1-4>
         print(f"Warning: LLM call failed in IMPEActComponent: {e}")
         import traceback
         traceback.print_exc()
-        text = f"I need to respond to the {audience_name}."
-        body = "Maintains neutral posture"
+        text = f'I need to respond to the {audience_name}.'
+        body = 'Maintains neutral posture'
         raw = f'DIALOGUE: {text}\nBODY: {body}'
 
       m1 = re.search(r'DIALOGUE:\s*(.*)', raw)
@@ -1782,6 +2333,10 @@ Respond with only: CHOICE: <number 1-4>
     """Set component state."""
     pass
 
+  def get_last_option_space_log(self) -> dict[str, Any] | None:
+    """Return the latest option-space decision details for debugging/logging."""
+    return self._last_option_space_log
+
 
 class IMPESelfAssessmentComponent(
     entity_component.ActingComponent, entity_component.ComponentWithLogging
@@ -1789,8 +2344,8 @@ class IMPESelfAssessmentComponent(
   """Self-assessment component that ensures responses align with background info.
 
   This component wraps IMPEActComponent and:
-  1. Assesses consistency of generated responses with traits, norms, and goals
-  2. Optionally revises responses when inconsistencies are detected
+  1. Asks the model whether each response is acceptable against traits, norms, and goals
+  2. Optionally revises responses when the model judges them unacceptable
   3. When the response is acceptable and will be executed, generates post-hoc
      reasoning (why this response was chosen) and includes it in the component log
   4. Logs assessment results (and post-hoc reasoning) for analysis; the log is
@@ -1804,7 +2359,6 @@ class IMPESelfAssessmentComponent(
       memory_component_key: str = DEFAULT_IMPE_MEMORY_COMPONENT_KEY,
       cultural_norms_key: str | None = None,
       personality_traits_key: str | None = None,
-      consistency_threshold: float = 0.7,
       enable_revision: bool = True,
   ):
     """Initialize self-assessment component.
@@ -1815,8 +2369,7 @@ class IMPESelfAssessmentComponent(
       memory_component_key: Key for memory component.
       cultural_norms_key: Key for cultural norms component (optional).
       personality_traits_key: Key for personality traits component (optional).
-      consistency_threshold: Minimum consistency score (0-1) to accept response.
-      enable_revision: Whether to revise responses when inconsistent.
+      enable_revision: Whether to revise responses when the model judges them unacceptable.
     """
     super().__init__()
     self._base_act_component = base_act_component
@@ -1824,7 +2377,6 @@ class IMPESelfAssessmentComponent(
     self._memory_component_key = memory_component_key
     self._cultural_norms_key = cultural_norms_key
     self._personality_traits_key = personality_traits_key
-    self._consistency_threshold = consistency_threshold
     self._enable_revision = enable_revision
 
   def set_entity(self, entity: entity_component.EntityWithComponents) -> None:
@@ -1832,15 +2384,6 @@ class IMPESelfAssessmentComponent(
     super().set_entity(entity)
     # Also set entity on base component so it can access other components
     self._base_act_component.set_entity(entity)
-
-  def set_logging_channel(
-      self, logging_channel: logging_lib.LoggingChannel
-  ) -> None:
-    """Set logger for both wrapper and wrapped acting component."""
-    super().set_logging_channel(logging_channel)
-    # Forward logs (e.g., option-space traces) emitted by the wrapped base act.
-    if hasattr(self._base_act_component, 'set_logging_channel'):
-      self._base_act_component.set_logging_channel(logging_channel)
 
   def _get_prompt_header(self) -> str:
     """Get prompt header with world context, norms and traits."""
@@ -1923,6 +2466,8 @@ class IMPESelfAssessmentComponent(
 
     # Get conversation to calculate turn (base component won't modify it due to skip_memory_update=True)
     conversation = memory.get_recent_conversation()
+    formative_memories = memory.get_formative_memories(k=8)
+    formative_block = memory.format_formative_memories(formative_memories)
     current_turn = len(conversation) + 1
     pf_history = memory.get_pf_history()
     refl_k = memory.get_recent_reflections(recent_k)
@@ -1948,6 +2493,10 @@ class IMPESelfAssessmentComponent(
       original_response = self._base_act_component.get_action_attempt(
           context, action_spec
       )
+
+    option_space_log = None
+    if hasattr(self._base_act_component, 'get_last_option_space_log'):
+      option_space_log = self._base_act_component.get_last_option_space_log()
 
     # Parse original response
     m1 = re.search(r'DIALOGUE:\s*(.*)', original_response)
@@ -1976,6 +2525,7 @@ Recent context:
 - Current belief (I_hat): {I_hat:.2f}
 - Recent reflections: {chr(10).join(f"- (turn {r.turn}) {r.text}" for r in refl_k[-2:]) or "- (none)"}
 - Recent conversation: {memory.format_conversation(conv_k[-2:])}
+- Relevant formative memories: {formative_block}
 
 You generated this response:
 DIALOGUE: {original_text}
@@ -1986,16 +2536,14 @@ Assess whether this response is consistent with:
 2. Your cultural norms (above)
 3. Your goal and current belief
 4. Your recent reflections
+5. Factual grounding in the provided conversation context (no invented records, resume facts, or numeric history)
+6. Conversational coherence (it should directly answer the partner's latest message before switching topics)
 
-Rate the consistency on a scale from 0.0 to 1.0, where:
-- 1.0 = Fully consistent with all background information
-- 0.5 = Partially consistent, some misalignment
-- 0.0 = Completely inconsistent
+Decide if the response is acceptable as-is (yes) or should be revised (no).
 
 Respond in this exact format:
-CONSISTENCY_SCORE: <0.0-1.0>
 IS_ACCEPTABLE: <yes/no>
-FEEDBACK: <brief comment on what is inconsistent and how to fix it>
+FEEDBACK: <brief comment on what is inconsistent and how to fix it, or why it is acceptable>
 """
 
     try:
@@ -2003,33 +2551,43 @@ FEEDBACK: <brief comment on what is inconsistent and how to fix it>
     except Exception as e:
       print(f"Warning: Self-assessment LLM call failed: {e}")
       # If assessment fails, accept the original response
-      consistency_score = 1.0
       is_acceptable = True
       feedback = "Assessment failed, accepting original response"
-      assessment_raw = ""
-
-    # Parse assessment
-    score_match = re.search(r'CONSISTENCY_SCORE:\s*([01](?:\.\d+)?)', assessment_raw)
-    acceptable_match = re.search(
-        r'IS_ACCEPTABLE:\s*(yes|no)', assessment_raw, re.IGNORECASE
-    )
-    feedback_match = re.search(
-        r'FEEDBACK:\s*(.*?)(?:\n|$)', assessment_raw, re.DOTALL
-    )
-
-    consistency_score = (
-        float(score_match.group(1)) if score_match else self._consistency_threshold
-    )
-    is_acceptable = (
+    else:
+      acceptable_match = re.search(
+          r'IS_ACCEPTABLE:\s*(yes|no)', assessment_raw, re.IGNORECASE
+      )
+      feedback_match = re.search(
+          r'FEEDBACK:\s*(.*?)(?:\n|$)', assessment_raw, re.DOTALL
+      )
+      # Be conservative when format is malformed: default to revision, not acceptance.
+      is_acceptable = (
         acceptable_match.group(1).lower() == 'yes'
         if acceptable_match
-        else consistency_score >= self._consistency_threshold
-    )
-    feedback = (
-        feedback_match.group(1).strip()
-        if feedback_match
-        else 'No feedback provided'
-    )
+        else False
+      )
+      feedback = (
+          feedback_match.group(1).strip()
+          if feedback_match
+          else 'No feedback provided'
+      )
+
+      # Guard against contradictory outputs like IS_ACCEPTABLE: yes with negative feedback.
+      contradiction_markers = (
+        'not mentioned',
+        'not established',
+        'not in the conversation',
+        'not in conversation history',
+        'hallucinat',
+        'invent',
+        'unsupported',
+        'inconsistent',
+        'violates',
+        'fails to',
+      )
+      feedback_lower = feedback.lower()
+      if is_acceptable and any(marker in feedback_lower for marker in contradiction_markers):
+        is_acceptable = False
 
     # Step 4: Revise if necessary
     final_text = original_text
@@ -2043,6 +2601,7 @@ Goal definition: {goal.description}.
 Recent context:
 - Current belief (I_hat): {I_hat:.2f}
 - Recent reflections: {chr(10).join(f"- (turn {r.turn}) {r.text}" for r in refl_k[-2:]) or "- (none)"}
+- Relevant formative memories: {formative_block}
 
 You previously generated this response:
 DIALOGUE: {original_text}
@@ -2057,6 +2616,8 @@ Generate a REVISED response that:
 3. Better follows your cultural norms
 4. Better supports your goal achievement
 5. Incorporates the feedback above
+6. Uses only facts present in the provided recent conversation/context; do not invent records, resume items, or numeric history
+7. Starts by directly answering the partner's latest message before introducing a new topic
 
 Output in this format exactly:
 DIALOGUE: <revised one sentence>
@@ -2106,13 +2667,13 @@ In 1-3 sentences, explain why you chose this response. Be concise.
     # Saved to component_logs.json when --save_component_logs is used (see results.save_component_logs).
     self._logging_channel({
         'Key': 'Self-Assessment',
-        'Consistency Score': consistency_score,
         'Is Acceptable': is_acceptable,
         'Was Revised': was_revised,
         'Feedback': feedback,
         'Posthoc Reasoning': posthoc_reasoning,
         'Original Response': f'DIALOGUE: {original_text}\nBODY: {original_body}',
         'Final Response': f'DIALOGUE: {final_text}\nBODY: {final_body}',
+      'Option Space': option_space_log,
     })
 
     # Step 6: Update memory with final utterance and action
