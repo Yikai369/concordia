@@ -17,8 +17,6 @@ class TurnMetrics:
   interviewer_neurotype: str
   interviewer_message: str
   candidate_response: str
-  candidate_adherence: float
-  interviewer_adherence: float
   candidate_competence: float
 
 
@@ -209,8 +207,6 @@ class InterviewGameMaster:
           interviewer_neurotype=self._interviewer_neurotype,
           interviewer_message=interviewer_message,
           candidate_response=candidate_text,
-          candidate_adherence=self._score_norm_adherence(candidate_text),
-          interviewer_adherence=self._score_norm_adherence(interviewer_message),
           candidate_competence=self._score_competence(candidate_text),
       )
       self._log.append(metrics)
@@ -233,12 +229,10 @@ class InterviewGameMaster:
         scores = None
       else:
         scores = {
-            'candidate_adherence': metrics.candidate_adherence,
-            'interviewer_adherence': metrics.interviewer_adherence,
             'candidate_competence': metrics.candidate_competence,
             'candidate_self_assessment': self._candidate_assessments_by_turn.get(turn),
             'interviewer_self_assessment': self._interviewer_assessments_by_turn.get(turn),
-          'prior_impression': self._prior_impression_by_turn.get(turn),
+            'prior_impression': self._prior_impression_by_turn.get(turn),
             'posterior_impression': self._posterior_impression_by_turn.get(turn),
             'feedback_interpretation': self._feedback_interpretation_by_turn.get(turn),
         }
@@ -339,18 +333,6 @@ class InterviewGameMaster:
     del turn
     action = self._interviewer.act()
     return self._parse_dialogue_and_body(action)
-
-  def _score_norm_adherence(self, text: str) -> float:
-    return self._extract_score(
-        self._model.sample_text(
-            'Score this utterance from 1 to 10 for adherence to direct/explicit Riffer norms. '
-            'Return only one number.\n'
-            f'Utterance: {text}'
-        ),
-        default=5.0,
-        minimum=1.0,
-        maximum=10.0,
-    )
 
   def _score_competence(self, candidate_text: str) -> float:
     return self._extract_score(

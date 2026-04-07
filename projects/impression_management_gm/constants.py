@@ -123,7 +123,7 @@ You understand the job requirements and will be evaluated on:
 - problem-solving ability
 - professionalism
 
-The interviewer operates under Riffer communication norms:
+The interviewer operates under Caden communication norms:
 - direct
 - explicit
 - minimal reliance on non-verbal cues
@@ -144,7 +144,7 @@ You evaluate candidates based on:
 - problem-solving ability
 - adherence to communication norms
 
-You follow Riffer communication norms and expect candidates to do the same.
+You follow Caden communication norms and expect candidates to do the same.
 
 You will ask questions to assess competence while maintaining a natural conversational flow.
 """

@@ -6,7 +6,6 @@ A Concordia-based experiment simulating structured interviews between agents wit
 
 This experiment studies how agents with different **neurotypes** (Riffer vs. Caden) adhere to **Riffer communication norms** in a simulated job interview. The goal is to measure:
 
-- **Norm adherence**: How well each agent follows explicit communication norms
 - **Satisfaction**: How satisfied each agent is with the interaction
 - **Surprise**: How unexpected each agent finds the other's behavior
 - **Competence**: How well the candidate demonstrates job-relevant competence
@@ -37,7 +36,7 @@ Generates personalized backstories for agents:
 Orchestrates the interview and metrics evaluation:
 - **Interview flow**: Generates greeting, manages turn-by-turn interaction
 - **Agent responses**: Prompts for candidate and interviewer to generate natural speech
-- **Metrics evaluation**: Assesses norm adherence, satisfaction, surprise, competence
+- **Metrics evaluation**: Assesses satisfaction, surprise, competence
 - **Logging**: Records all interactions with full metrics per turn
 
 #### `main.py`
@@ -75,10 +74,6 @@ Turn t (1 to max_turns):
 ### Metrics Per Turn
 
 For each interaction turn, the system logs:
-
-**Norm Adherence (0-10)**
-- Evaluated via LLM across: directness, explicitness, clarity, honesty
-- Assessed separately for candidate and interviewer
 
 **Satisfaction (0-10)**
 - How comfortable does each agent feel?
@@ -141,7 +136,7 @@ results/
 
 ### Files
 
-- **interaction_log.json**: Machine-readable metrics (turn, adherence, satisfaction, surprise, competence)
+- **interaction_log.json**: Machine-readable metrics (turn, satisfaction, surprise, competence)
 - **transcript.txt**: Full conversation for manual review
 - **report.txt**: Human-readable summary with averages and insights
 - **memories.txt**: Agent backstories used in the conversation

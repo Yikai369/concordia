@@ -518,9 +518,6 @@ Log per interaction round:
   "interviewer_message": ...,
   "candidate_response": ...,
 
-  "candidate_adherence": ...,
-  "interviewer_adherence": ...,
-
   "candidate_competence": ...
 }
 ```

@@ -30,7 +30,27 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument(
       '--model',
       default='gemini-flash-latest',
-      help='Gemini model name (Google AI Studio).',
+    help=(
+      'Model name for the selected backend. Defaults to a Gemini model '
+      'unless --local_model is enabled.'
+    ),
+  )
+  parser.add_argument(
+    '--local_model',
+    action='store_true',
+    help='Use NVIDIA OpenAI-compatible endpoint instead of Gemini.',
+  )
+  parser.add_argument(
+    '--local_model_name',
+    type=str,
+    default='nvidia/nemotron-3-super-120b-a12b',
+    help='Model name to use when --local_model is enabled.',
+  )
+  parser.add_argument(
+    '--local_api_base',
+    type=str,
+    default='https://integrate.api.nvidia.com/v1',
+    help='Base URL for the local OpenAI-compatible endpoint.',
   )
   parser.add_argument(
       '--condition',
@@ -76,6 +96,7 @@ def main() -> None:
   args = parse_args()
 
   from concordia.language_model import google_aistudio_model
+  from concordia.language_model import nvidia_openai_model
 
   from projects.impression_management import setup as base_setup
   from projects.impression_management_gm import constants
@@ -83,22 +104,35 @@ def main() -> None:
   from projects.impression_management_gm import formative_memories_initializer
   from projects.impression_management_gm.game_master import InterviewGameMaster
 
-  api_key = os.environ.get('GEMINI_API_KEY', '').strip()
-  if not api_key:
-    # GoogleAIStudioLanguageModel defaults to GOOGLE_API_KEY; keep both for convenience.
-    api_key = os.environ.get('GOOGLE_API_KEY', '').strip()
-  if not api_key:
-    raise RuntimeError(
-        'Set GOOGLE_API_KEY for Gemini access.'
+  if args.local_model:
+    api_key = os.environ.get('NVIDIA_API_KEY', '').strip()
+    if not api_key:
+      raise RuntimeError(
+          'Set NVIDIA_API_KEY when --local_model is enabled.'
+      )
+    model = nvidia_openai_model.NvidiaOpenAILanguageModel(
+        model_name=args.local_model_name,
+        api_key=api_key,
+        api_base=args.local_api_base,
+    )
+  else:
+    api_key = os.environ.get('GEMINI_API_KEY', '').strip()
+    if not api_key:
+      # GoogleAIStudioLanguageModel defaults to GOOGLE_API_KEY; keep both for convenience.
+      api_key = os.environ.get('GOOGLE_API_KEY', '').strip()
+    if not api_key:
+      raise RuntimeError(
+          'Set GOOGLE_API_KEY for Gemini access.'
+      )
+
+    model = google_aistudio_model.GoogleAIStudioLanguageModel(
+        model_name=args.model,
+        api_key=api_key,
     )
 
   save_dir = Path(args.save_dir or f"./temp/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
   save_dir.mkdir(parents=True, exist_ok=True)
 
-  model = google_aistudio_model.GoogleAIStudioLanguageModel(
-      model_name=args.model,
-      api_key=api_key,
-  )
   _, memory_bank = base_setup.setup_embedder_and_memory()
 
   initializer = formative_memories_initializer.FormativeMemoriesInitializer(model)
@@ -165,8 +199,6 @@ def main() -> None:
             'candidate_neurotype': candidate_neurotype,
             'interviewer_neurotype': interviewer_neurotype,
             'turns': len(rows),
-            'candidate_adherence_avg': _avg([r.candidate_adherence for r in rows]),
-            'interviewer_adherence_avg': _avg([r.interviewer_adherence for r in rows]),
             'candidate_competence_avg': _avg([r.candidate_competence for r in rows]),
         }
     )

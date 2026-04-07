@@ -14,14 +14,14 @@
 
 """Base class for GPT models (OpenAI and Azure)."""
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection
+from collections.abc import Sequence
 
 from concordia.language_model import language_model
 from concordia.utils.deprecated import measurements as measurements_lib
 from openai import AzureOpenAI
 from openai import OpenAI
 from typing_extensions import override
-
 
 _MAX_MULTIPLE_CHOICE_ATTEMPTS = 20
 _DEFAULT_VERBOSITY = 'low'
@@ -37,6 +37,7 @@ class BaseGPTModel(language_model.LanguageModel):
       self,
       model_name: str,
       client: AzureOpenAI | OpenAI,
+      default_timeout_seconds: float = language_model.DEFAULT_TIMEOUT_SECONDS,
       measurements: measurements_lib.Measurements | None = None,
       channel: str = language_model.DEFAULT_STATS_CHANNEL,
   ):
@@ -45,10 +46,15 @@ class BaseGPTModel(language_model.LanguageModel):
     self._measurements = measurements
     self._channel = channel
     self._client = client
+    self._default_timeout_seconds = default_timeout_seconds
 
     self._verbosity = _DEFAULT_VERBOSITY
     if 'gpt-4o' in self._model_name:
       self._verbosity = 'medium'  # GPT-4o only supports verbosity 'medium'
+
+  def _supports_reasoning_controls(self) -> bool:
+    model_name = self._model_name.lower()
+    return 'gpt-5' in model_name or 'o1' in model_name
 
   def _sample_text(
       self,
@@ -62,8 +68,13 @@ class BaseGPTModel(language_model.LanguageModel):
       top_p: float = language_model.DEFAULT_TOP_P,
       timeout: float = language_model.DEFAULT_TIMEOUT_SECONDS,
       seed: int | None = None,
+      extra_body: dict[str, object] | None = None,
   ) -> str:
-    del terminators, top_p  # Unused for OpenAI models.
+    del terminators
+
+    # Allow backend-specific default timeout while preserving explicit callers.
+    if timeout == language_model.DEFAULT_TIMEOUT_SECONDS:
+      timeout = self._default_timeout_seconds
 
     messages = [
         {
@@ -90,20 +101,27 @@ class BaseGPTModel(language_model.LanguageModel):
         {'role': 'user', 'content': prompt},
     ]
 
+    # OpenAI-compatible local endpoints often reject max_completion_tokens.
+    # Use max_tokens unless the model family is known to require reasoning knobs.
+    token_field = 'max_completion_tokens' if self._supports_reasoning_controls() else 'max_tokens'
+
     # Only include reasoning_effort and verbosity for models that support them
     # (e.g., GPT-5, o1 models)
     create_kwargs = {
         'model': self._model_name,
         'messages': messages,
         'temperature': temperature,
-        'max_completion_tokens': max_tokens,
+      'top_p': top_p,
+        token_field: max_tokens,
         'timeout': timeout,
         'seed': seed,
     }
     # Only add reasoning_effort and verbosity for models that support them
-    if 'gpt-5' in self._model_name.lower() or 'o1' in self._model_name.lower():
+    if self._supports_reasoning_controls():
       create_kwargs['reasoning_effort'] = reasoning_effort
       create_kwargs['verbosity'] = verbosity
+    if extra_body is not None:
+      create_kwargs['extra_body'] = extra_body
 
     response = self._client.chat.completions.create(**create_kwargs)
 
@@ -127,6 +145,7 @@ class BaseGPTModel(language_model.LanguageModel):
       top_k: int = language_model.DEFAULT_TOP_K,
       timeout: float = language_model.DEFAULT_TIMEOUT_SECONDS,
       seed: int | None = None,
+      extra_body: dict[str, object] | None = None,
   ) -> str:
     del top_k  # Unused
     return self._sample_text(
@@ -139,6 +158,7 @@ class BaseGPTModel(language_model.LanguageModel):
         top_p=top_p,
         timeout=timeout,
         seed=seed,
+        extra_body=extra_body,
     )
 
   @override
@@ -164,6 +184,7 @@ class BaseGPTModel(language_model.LanguageModel):
           reasoning_effort='medium',
           verbosity=self._verbosity,
           temperature=1.0,
+          top_p=0.95,
           seed=seed,
       )
       try:
