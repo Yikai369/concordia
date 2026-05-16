@@ -89,12 +89,25 @@ For each interaction turn, the system logs:
 
 ## Usage
 
-### Basic Run (All Conditions)
+### Basic Run (Default: Questionnaire for Riffer_x_Caden)
+
+Builds the candidate and interviewer, initializes formative memories, and then runs both Convergent Validity 1 and Convergent Validity 2 questionnaires for the `Riffer_x_Caden` condition.
+
+```bash
+python main.py \
+  --model gemini-flash-latest \
+  --save_dir ./results
+```
+
+### Interview Run
+
+Runs the interview loop instead of the questionnaire.
 
 ```bash
 python main.py \
   --model gemini-flash-latest \
   --save_dir ./results \
+  --interview \
   --turns 10
 ```
 

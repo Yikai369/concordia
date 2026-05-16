@@ -67,6 +67,11 @@ def parse_args() -> argparse.Namespace:
   parser.add_argument('--turns', type=int, default=6)
   parser.add_argument('--memory_count', type=int, default=24)
   parser.add_argument('--save_dir', type=str, default=None)
+  parser.add_argument(
+      '--interview',
+      action='store_true',
+      help='Run the interview loop instead of the questionnaire. Default is to run questionnaire only.',
+  )
   return parser.parse_args()
 
 
@@ -92,6 +97,11 @@ def _sample_agent_names(*, rng: random.Random, pool: list[str]) -> tuple[str, st
   return candidate_name, interviewer_name
 
 
+def _write_json(path: Path, payload: object) -> None:
+  with open(path, 'w', encoding='utf-8') as f:
+    json.dump(payload, f, indent=2)
+
+
 def main() -> None:
   args = parse_args()
 
@@ -102,6 +112,7 @@ def main() -> None:
   from projects.impression_management_gm import constants
   from projects.impression_management_gm import entities
   from projects.impression_management_gm import formative_memories_initializer
+  from projects.impression_management_gm import questionnaire
   from projects.impression_management_gm.game_master import InterviewGameMaster
 
   if args.local_model:
@@ -138,12 +149,24 @@ def main() -> None:
   initializer = formative_memories_initializer.FormativeMemoriesInitializer(model)
   rng = random.Random(constants.DEFAULT_SEED)
 
-  aggregate: list[dict] = []
+  if args.interview:
+    selected_conditions = _condition_pairs(
+        args.condition,
+        constants.EXPERIMENT_CONDITIONS,
+    )
+  else:
+    if args.condition == 'all':
+      selected_conditions = [('Riffer', 'Caden')]
+    else:
+      selected_conditions = _condition_pairs(
+          args.condition,
+          constants.EXPERIMENT_CONDITIONS,
+      )
 
-  for candidate_neurotype, interviewer_neurotype in _condition_pairs(
-      args.condition,
-      constants.EXPERIMENT_CONDITIONS,
-  ):
+  aggregate: list[dict] = []
+  questionnaire_results: list[dict] = []
+
+  for candidate_neurotype, interviewer_neurotype in selected_conditions:
     candidate_name, interviewer_name = _sample_agent_names(
         rng=rng,
         pool=constants.AGENT_NAME_POOL,
@@ -172,6 +195,60 @@ def main() -> None:
         )
     )
 
+    _write_json(
+      condition_dir / 'memories.json',
+      {
+        'candidate_memories': candidate_memories,
+        'interviewer_memories': interviewer_memories,
+      },
+    )
+
+    if not args.interview:
+      qr_candidate = {
+        'convergent_validity': questionnaire.run_convergent_validity_questionnaire(
+          model=model,
+          agent_name=candidate.name,
+          role_label='candidate',
+          neurotype=candidate_neurotype,
+          role_context=constants.CANDIDATE_ROLE_CONTEXT,
+          memories=candidate_memories,
+        ),
+        'empathy': questionnaire.run_empathy_questionnaire(
+          model=model,
+          agent_name=candidate.name,
+          role_label='candidate',
+          neurotype=candidate_neurotype,
+          role_context=constants.CANDIDATE_ROLE_CONTEXT,
+          memories=candidate_memories,
+        ),
+      }
+      qr_interviewer = {
+        'convergent_validity': questionnaire.run_convergent_validity_questionnaire(
+          model=model,
+          agent_name=interviewer.name,
+          role_label='interviewer',
+          neurotype=interviewer_neurotype,
+          role_context=constants.INTERVIEWER_ROLE_CONTEXT,
+          memories=interviewer_memories,
+        ),
+        'empathy': questionnaire.run_empathy_questionnaire(
+          model=model,
+          agent_name=interviewer.name,
+          role_label='interviewer',
+          neurotype=interviewer_neurotype,
+          role_context=constants.INTERVIEWER_ROLE_CONTEXT,
+          memories=interviewer_memories,
+        ),
+      }
+      questionnaire_result = {
+        'condition': condition_id,
+        'candidate': qr_candidate,
+        'interviewer': qr_interviewer,
+      }
+      questionnaire_results.append(questionnaire_result)
+      _write_json(condition_dir / 'questionnaire.json', questionnaire_result)
+      continue
+
     gm = InterviewGameMaster(
         model=model,
         candidate=candidate,
@@ -183,16 +260,6 @@ def main() -> None:
     rows = gm.run(turns=args.turns)
     gm.save_json(str(condition_dir / 'interaction_log.json'))
 
-    with open(condition_dir / 'memories.json', 'w', encoding='utf-8') as f:
-      json.dump(
-          {
-              'candidate_memories': candidate_memories,
-              'interviewer_memories': interviewer_memories,
-          },
-          f,
-          indent=2,
-      )
-
     aggregate.append(
         {
             'condition': condition_id,
@@ -203,15 +270,24 @@ def main() -> None:
         }
     )
 
-  with open(save_dir / 'aggregate_results.json', 'w', encoding='utf-8') as f:
-    json.dump(
+  if not args.interview:
+    _write_json(
+        save_dir / 'questionnaire_results.json',
         {
             'generated_at': datetime.utcnow().isoformat() + 'Z',
-            'results': aggregate,
+            'results': questionnaire_results,
         },
-        f,
-        indent=2,
     )
+  else:
+    with open(save_dir / 'aggregate_results.json', 'w', encoding='utf-8') as f:
+      json.dump(
+          {
+              'generated_at': datetime.utcnow().isoformat() + 'Z',
+              'results': aggregate,
+          },
+          f,
+          indent=2,
+      )
 
   print(f'Completed. Results saved in: {save_dir}')
 

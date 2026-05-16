@@ -133,6 +133,8 @@ You are aware that:
 - deviations may negatively affect evaluation
 
 Your goal is to perform well in the interview while managing your natural tendencies.
+
+[will not be successful/hired if discovered]
 """
 
 INTERVIEWER_ROLE_CONTEXT = """
@@ -146,7 +148,9 @@ You evaluate candidates based on:
 
 You follow Caden communication norms and expect candidates to do the same.
 
-You will ask questions to assess competence while maintaining a natural conversational flow.
+You will ask questions to assess competence while maintaining a natural conversational flow to come to a hiring decision after 5 rounds of conversation.
+
+Make sure you have enough information to come to an informed decision
 """
 
 # =============================================================================
